@@ -1,0 +1,258 @@
+# perf/docker-compose.python.yml
+# ──────────────────────────────────────────────────────────────────────────────
+# Python (origin/final branch) stack for performance comparison.
+#
+# Architecture mirrors the Go stack exactly:
+#   Kong → api-producer (Python/FastAPI) → RabbitMQ → Python consumers
+#
+# Source is extracted from the origin/final git ref at image build time —
+# the golang working tree is never modified.
+#
+# Port layout (offset +1000 from Go stack to allow simultaneous runs):
+#   Kong proxy:           HOST:9000
+#   api-producer:         HOST:9080
+#   postgres (py):        HOST:5433
+#   redis (py):           HOST:6380
+#   rabbitmq AMQP:        HOST:5673
+#   rabbitmq mgmt UI:     HOST:15673
+#
+# Usage (from repo root):
+#   podman compose -f perf/docker-compose.python.yml \
+#                  -f perf/docker-compose.python.override.yml up -d --build
+#   podman compose -f perf/docker-compose.python.yml \
+#                  -f perf/docker-compose.python.override.yml down -v
+#
+# context: ../../ resolves to the repo root (compose file is at tests/perf/).
+# This is required because COPY . /repo must include .git for `git archive`
+# to work. docker-compose resolves context paths relative to the compose file.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Shared env for all Python consumer services
+x-py-consumer-env: &py-consumer-env
+  DATABASE_URL:   postgresql://banking:bankingpass@postgres-py:5432/banking
+  REDIS_URL:      redis://redis-py:6379/0
+  RABBITMQ_URL:   amqp://banking:bankingpass@rabbitmq-py:5672/
+  CORS_ORIGINS:   "*"
+
+x-py-consumer-deps: &py-consumer-deps
+  postgres-py:
+    condition: service_healthy
+  redis-py:
+    condition: service_healthy
+  rabbitmq-py:
+    condition: service_healthy
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+
+  postgres-py:
+    image: postgres:18
+    container_name: py-postgres
+    environment:
+      POSTGRES_DB:       banking
+      POSTGRES_USER:     banking
+      POSTGRES_PASSWORD: bankingpass
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking"]
+      interval: 8s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+    networks: [py-perf]
+
+  redis-py:
+    image: redis:8-alpine
+    container_name: py-redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 8s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks: [py-perf]
+
+  rabbitmq-py:
+    image: rabbitmq:4-management-alpine
+    container_name: py-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: banking
+      RABBITMQ_DEFAULT_PASS: bankingpass
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks: [py-perf]
+
+  # ── Kong — same route layout as Go stack (/api/* → api-producer) ──────────
+
+  kong-py:
+    image: kong:3.9
+    container_name: py-kong
+    environment:
+      KONG_DATABASE:              "off"
+      KONG_DECLARATIVE_CONFIG:    /kong/kong.yml
+      KONG_PROXY_ACCESS_LOG:      /dev/null
+      KONG_ADMIN_ACCESS_LOG:      /dev/null
+      KONG_PROXY_ERROR_LOG:       /dev/stderr
+      KONG_ADMIN_ERROR_LOG:       /dev/stderr
+      KONG_ADMIN_LISTEN:          0.0.0.0:8001
+      KONG_PROXY_LISTEN:          0.0.0.0:8000
+      KONG_DNS_NOT_FOUND_TTL:     "5"
+      KONG_DNS_ERROR_TTL:         "5"
+    # Bypass Kong's Lua DNS client — same fix as the Go stack.
+    # Kong reads /etc/hosts before its DNS resolver, so these entries
+    # never trigger a UDP query to 10.89.1.1:53.
+    extra_hosts:
+      - "api-producer-py:172.31.0.10"
+    ports:
+      - "9000:8000"
+    volumes:
+      - ./python-kong/kong.yml:/kong/kong.yml:ro
+    depends_on:
+      api-producer-py:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/status"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks: [py-perf]
+
+  # ── API Producer (Python/FastAPI, Kong → RabbitMQ proxy) ──────────────────
+
+  api-producer-py:
+    container_name: py-api-producer
+    build:
+      context: ../../
+      dockerfile: tests/perf/dockerfiles/Dockerfile.api-producer-py
+    environment:
+      RABBITMQ_URL: amqp://banking:bankingpass@rabbitmq-py:5672/
+    depends_on:
+      rabbitmq-py:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      py-perf:
+        ipv4_address: "172.31.0.10"
+    ports:
+      - "9080:8080"
+
+  # ── Consumer services ─────────────────────────────────────────────────────
+
+  auth-service-py:
+    container_name: py-auth-service
+    build:
+      context: ../../
+      dockerfile: tests/perf/dockerfiles/Dockerfile.auth-service-py
+    environment:
+      <<: *py-consumer-env
+    depends_on:
+      <<: *py-consumer-deps
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    networks: [py-perf]
+    ports:
+      - "9001:8001"
+
+  account-service-py:
+    container_name: py-account-service
+    build:
+      context: ../../
+      dockerfile: tests/perf/dockerfiles/Dockerfile.account-service-py
+    environment:
+      <<: *py-consumer-env
+    depends_on:
+      <<: *py-consumer-deps
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    networks: [py-perf]
+    ports:
+      - "9002:8002"
+
+  transfer-service-py:
+    container_name: py-transfer-service
+    build:
+      context: ../../
+      dockerfile: tests/perf/dockerfiles/Dockerfile.transfer-service-py
+    environment:
+      <<: *py-consumer-env
+    depends_on:
+      <<: *py-consumer-deps
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    networks: [py-perf]
+    ports:
+      - "9003:8003"
+
+  notification-service-py:
+    container_name: py-notification-service
+    build:
+      context: ../../
+      dockerfile: tests/perf/dockerfiles/Dockerfile.notification-service-py
+    environment:
+      <<: *py-consumer-env
+    depends_on:
+      <<: *py-consumer-deps
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    networks: [py-perf]
+    ports:
+      - "9004:8004"
+
+# ── Network ──────────────────────────────────────────────────────────────────
+# Fixed subnet (172.31.0.0/24) avoids collision with the Go stack (172.30.0.0/24).
+# api-producer-py gets a pinned IP so Kong can resolve it via /etc/hosts
+# (extra_hosts) without ever sending a UDP DNS query to 10.89.1.1:53, which
+# Podman's network isolation drops — same fix as the Go stack.
+#
+# Fixed allocations:
+#   .1  = gateway (reserved)
+#   .10 = api-producer-py  ← Kong upstream
+networks:
+  py-perf:
+    name: py-perf
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.31.0.0/24"
+          gateway: "172.31.0.1"

@@ -1,0 +1,484 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, golang]
+    paths:
+      - 'go.work'
+      - 'go.work.sum'
+      - 'internal/**'
+      - 'producer/**'
+      - 'services/**'
+      - 'frontend/**'
+      - 'migrations/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'go.work'
+      - 'go.work.sum'
+      - 'internal/**'
+      - 'producer/**'
+      - 'services/**'
+      - 'frontend/**'
+
+  workflow_dispatch:
+    inputs:
+      services:
+        description: 'Services to build (comma-separated or "all")'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - api-producer
+          - auth-service
+          - account-service
+          - transfer-service
+          - notification-service
+          - frontend
+      skip_tests:
+        description: 'Skip tests (for hotfix)'
+        required: false
+        default: false
+        type: boolean
+      force_push:
+        description: 'Force push images (even on non-main branch)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/dungxnd/banking-demo
+  GO_VERSION: '1.23'
+
+jobs:
+  # ============================================================
+  # Detect which services changed
+  # ============================================================
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      auth-service: ${{ steps.filter.outputs.auth-service }}
+      account-service: ${{ steps.filter.outputs.account-service }}
+      transfer-service: ${{ steps.filter.outputs.transfer-service }}
+      notification-service: ${{ steps.filter.outputs.notification-service }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      api-producer: ${{ steps.filter.outputs.api-producer }}
+      internal: ${{ steps.filter.outputs.internal }}
+      any-go: ${{ steps.filter.outputs.any-go }}
+      services-list: ${{ steps.build-list.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect file changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            auth-service:
+              - 'services/auth-service/**'
+              - 'internal/**'
+              - 'go.work'
+            account-service:
+              - 'services/account-service/**'
+              - 'internal/**'
+              - 'go.work'
+            transfer-service:
+              - 'services/transfer-service/**'
+              - 'internal/**'
+              - 'go.work'
+            notification-service:
+              - 'services/notification-service/**'
+              - 'internal/**'
+              - 'go.work'
+            api-producer:
+              - 'producer/**'
+              - 'internal/**'
+              - 'go.work'
+            frontend:
+              - 'frontend/**'
+            internal:
+              - 'internal/**'
+              - 'go.work'
+            any-go:
+              - 'internal/**'
+              - 'producer/**'
+              - 'services/**'
+              - 'go.work'
+              - 'go.work.sum'
+
+      - name: Build services list
+        id: build-list
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            SERVICES="${{ github.event.inputs.services }}"
+            [ "$SERVICES" == "all" ] && SERVICES="api-producer,auth-service,account-service,transfer-service,notification-service,frontend"
+            echo "services=$SERVICES" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # internal changed → rebuild all Go services
+          if [ "${{ steps.filter.outputs.internal }}" == "true" ]; then
+            echo "services=api-producer,auth-service,account-service,transfer-service,notification-service" >> $GITHUB_OUTPUT
+            echo "internal changed - rebuilding all Go services"
+            exit 0
+          fi
+
+          SERVICES=""
+          [ "${{ steps.filter.outputs.auth-service }}" == "true" ]         && SERVICES="$SERVICES,auth-service"
+          [ "${{ steps.filter.outputs.account-service }}" == "true" ]      && SERVICES="$SERVICES,account-service"
+          [ "${{ steps.filter.outputs.transfer-service }}" == "true" ]     && SERVICES="$SERVICES,transfer-service"
+          [ "${{ steps.filter.outputs.notification-service }}" == "true" ] && SERVICES="$SERVICES,notification-service"
+          [ "${{ steps.filter.outputs.api-producer }}" == "true" ]         && SERVICES="$SERVICES,api-producer"
+          [ "${{ steps.filter.outputs.frontend }}" == "true" ]             && SERVICES="$SERVICES,frontend"
+
+          SERVICES="${SERVICES#,}"
+          [ -z "$SERVICES" ] && SERVICES="none"
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+          echo "Changed services: $SERVICES"
+
+  # ============================================================
+  # Stage 1: Lint — golangci-lint across the whole workspace
+  # ============================================================
+  lint:
+    name: Lint (Go)
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-go == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            internal/go.sum
+            producer/go.sum
+            services/auth-service/go.sum
+            services/account-service/go.sum
+            services/transfer-service/go.sum
+            services/notification-service/go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m ./...
+          working-directory: .
+
+  # ============================================================
+  # Stage 2: Test — go test across all modules
+  # ============================================================
+  test:
+    name: Test (Go)
+    runs-on: ubuntu-latest
+    needs: [detect-changes, lint]
+    if: |
+      (needs.detect-changes.outputs.any-go == 'true' || github.event_name == 'workflow_dispatch') &&
+      github.event.inputs.skip_tests != 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            internal/go.sum
+            producer/go.sum
+            services/auth-service/go.sum
+            services/account-service/go.sum
+            services/transfer-service/go.sum
+            services/notification-service/go.sum
+
+      - name: Run tests
+        run: go test -v -count=1 ./...
+
+      - name: go vet
+        run: go vet ./...
+
+  # ============================================================
+  # Stage 3: Build Docker images (selective, parallel)
+  # ============================================================
+  build-images:
+    name: Build / ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, test]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.services-list != 'none' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api-producer
+            dockerfile: producer/Dockerfile
+            context: .
+          - service: auth-service
+            dockerfile: services/auth-service/Dockerfile
+            context: .
+          - service: account-service
+            dockerfile: services/account-service/Dockerfile
+            context: .
+          - service: transfer-service
+            dockerfile: services/transfer-service/Dockerfile
+            context: .
+          - service: notification-service
+            dockerfile: services/notification-service/Dockerfile
+            context: .
+          - service: frontend
+            dockerfile: frontend/Dockerfile
+            context: frontend
+    steps:
+      - name: Check if should build
+        id: gate
+        run: |
+          SERVICES="${{ needs.detect-changes.outputs.services-list }}"
+          SERVICE="${{ matrix.service }}"
+          if [ "$SERVICES" == "all" ] || echo ",$SERVICES," | grep -q ",$SERVICE,"; then
+            echo "build=true" >> $GITHUB_OUTPUT
+          else
+            echo "build=false" >> $GITHUB_OUTPUT
+            echo "Skipping $SERVICE (not in [$SERVICES])"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.build == 'true'
+
+      - name: Set up Docker Buildx
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate image tags
+        if: steps.gate.outputs.build == 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build image
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/${{ matrix.service }}.tar
+
+      - name: Upload image artifact
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp/${{ matrix.service }}.tar
+          retention-days: 1
+
+  # ============================================================
+  # Stage 4: Push images to ghcr.io
+  # ============================================================
+  push-images:
+    name: Push / ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build-images]
+    if: |
+      always() &&
+      needs.build-images.result == 'success' &&
+      (
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')) ||
+        (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.event.inputs.force_push == 'true'))
+      )
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-producer
+          - auth-service
+          - account-service
+          - transfer-service
+          - notification-service
+          - frontend
+    steps:
+      - name: Check if should push
+        id: gate
+        run: |
+          SERVICES="${{ needs.detect-changes.outputs.services-list }}"
+          SERVICE="${{ matrix.service }}"
+          if [ "$SERVICES" == "all" ] || echo ",$SERVICES," | grep -q ",$SERVICE,"; then
+            echo "push=true" >> $GITHUB_OUTPUT
+          else
+            echo "push=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download image artifact
+        if: steps.gate.outputs.push == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp
+        continue-on-error: true
+
+      - name: Check artifact exists
+        if: steps.gate.outputs.push == 'true'
+        id: check
+        run: |
+          [ -f "/tmp/${{ matrix.service }}.tar" ] && echo "exists=true" >> $GITHUB_OUTPUT || echo "exists=false" >> $GITHUB_OUTPUT
+
+      - name: Load image
+        if: steps.gate.outputs.push == 'true' && steps.check.outputs.exists == 'true'
+        run: docker load -i /tmp/${{ matrix.service }}.tar
+
+      - name: Log in to ghcr.io
+        if: steps.gate.outputs.push == 'true' && steps.check.outputs.exists == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push tags
+        if: steps.gate.outputs.push == 'true' && steps.check.outputs.exists == 'true'
+        run: |
+          SHA="$(git rev-parse --short=7 HEAD 2>/dev/null || echo 'unknown')"
+          IMAGE="${{ env.IMAGE_PREFIX }}/${{ matrix.service }}"
+          LOADED=$(docker images --format "{{.Repository}}:{{.Tag}}" | head -1)
+          for tag in "$IMAGE:$SHA" "$IMAGE:${{ github.ref_name }}" "$IMAGE:latest"; do
+            docker tag "$LOADED" "$tag"
+            docker push "$tag"
+            echo "Pushed: $tag"
+          done
+
+  # ============================================================
+  # Stage 5: Update image tags in Helm values (GitOps)
+  # ============================================================
+  update-manifests:
+    name: Update Image Tags
+    runs-on: ubuntu-latest
+    needs: [detect-changes, push-images]
+    permissions:
+      contents: write
+    if: |
+      always() &&
+      needs.push-images.result == 'success' &&
+      github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compute image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Update Helm values
+        run: |
+          SERVICES="${{ needs.detect-changes.outputs.services-list }}"
+          TAG="${{ steps.tag.outputs.sha }}"
+          CHART_DIR="helm/banking-demo/charts"
+
+          should_update() { [ "$SERVICES" == "all" ] && return 0; echo "$SERVICES" | grep -q "$1"; }
+          update_tag() {
+            local file="$CHART_DIR/$1/values.yaml"
+            [ -f "$file" ] && sed -i "s|tag: .*|tag: $TAG|" "$file" && echo "Updated $1 → $TAG"
+          }
+
+          for svc in api-producer auth-service account-service transfer-service notification-service frontend; do
+            should_update "$svc" && update_tag "$svc"
+          done
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/banking-demo/charts/*/values.yaml
+          if git diff --cached --quiet; then
+            echo "No tag changes, skipping commit"
+            exit 0
+          fi
+          git commit -m "ci: update image tags to ${{ steps.tag.outputs.sha }} [${{ needs.detect-changes.outputs.services-list }}] [skip ci]"
+          git push origin main
+
+  # ============================================================
+  # Stage 6: Security scan (Trivy)
+  # ============================================================
+  security-scan:
+    name: Scan / ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, push-images]
+    if: |
+      always() &&
+      needs.push-images.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-producer
+          - auth-service
+          - account-service
+          - transfer-service
+          - notification-service
+    steps:
+      - name: Check if should scan
+        id: gate
+        run: |
+          SERVICES="${{ needs.detect-changes.outputs.services-list }}"
+          SERVICE="${{ matrix.service }}"
+          if [ "$SERVICES" == "all" ] || echo ",$SERVICES," | grep -q ",$SERVICE,"; then
+            echo "scan=true" >> $GITHUB_OUTPUT
+          else
+            echo "scan=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Trivy scan
+        if: steps.gate.outputs.scan == 'true'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
+          format: table
+          exit-code: 0
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+        continue-on-error: true
+
+  # ============================================================
+  # CI Summary
+  # ============================================================
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [detect-changes, lint, test, build-images, push-images, update-manifests]
+    if: always()
+    steps:
+      - name: Write summary
+        run: |
+          {
+            echo "## CI Summary"
+            echo ""
+            echo "**Branch:** \`${{ github.ref_name }}\`"
+            echo "**Commit:** \`${{ github.sha }}\`"
+            echo "**Services:** \`${{ needs.detect-changes.outputs.services-list }}\`"
+            echo ""
+            echo "| Stage | Result |"
+            echo "|-------|--------|"
+            echo "| Lint  | ${{ needs.lint.result }} |"
+            echo "| Test  | ${{ needs.test.result }} |"
+            echo "| Build | ${{ needs.build-images.result }} |"
+            echo "| Push  | ${{ needs.push-images.result }} |"
+            echo "| Manifests | ${{ needs.update-manifests.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on build error
+        if: needs.build-images.result == 'failure'
+        run: echo "Build failed!" && exit 1

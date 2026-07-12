@@ -1,0 +1,111 @@
+# perf/docker-compose.override.yml
+# Resource caps for the Go stack (golang branch) stress testing.
+# Tuned for: Intel Core Ultra 5 235U, Podman WSL2 VM = 7 vCPU / 2 GB RAM.
+#
+# ── Benchmark goal — Go vs Python comparison ──────────────────────────────────
+# The cap exists for ONE reason: symmetry. Both stacks get exactly the same
+# CPU/memory budget so the comparison is apples-to-apples.
+# PostgreSQL is capped here not because we want to stress the DB, but because
+# an uncapped DB would absorb all available host CPU and hide the actual
+# Go vs Python service-layer differences.
+#
+# ── What PostgreSQL caps measure vs what they hide ────────────────────────────
+# At 0.75 CPU and 512 MB:
+#   - "transfer_waiting p95" measures DB lock wait + transaction serialization
+#     PLUS any CPU queuing from the cap. These are INDISTINGUISHABLE in the
+#     metric, but they're symmetric across both stacks, so comparisons are valid.
+#
+# ── When to REMOVE the Postgres cap (isolation runs) ─────────────────────────
+# To answer "is it SERIALIZABLE overhead or CPU pressure?", remove the cap
+# and rerun. If latency drops sharply → CPU-starved at 0.75. If latency stays
+# the same → the bottleneck is lock contention or the service layer itself.
+#   postgres:
+#     deploy:
+#       resources: {}   # or delete the deploy block entirely
+#
+# Similarly, remove the transfer-service cap to ask "is it the app or the DB?":
+#   transfer-service:
+#     deploy:
+#       resources: {}
+#
+# ── Infrastructure (Kong, NATS, Redis) stays UNCAPPED ────────────────────────
+# Throttling shared plumbing would skew results unfairly.
+
+services:
+
+  # ── Services under test (capped symmetrically with Python stack) ─────────────
+
+  api-producer:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"      # matches api-producer-py
+          memory: "128M"
+        reservations:
+          cpus: "0.05"
+          memory: "64M"
+
+  transfer-service:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"     # ← primary bottleneck; matches transfer-service-py
+          memory: "256M"
+        reservations:
+          cpus: "0.1"
+          memory: "128M"
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"     # ← SERIALIZABLE tx; matches postgres-py
+          # 512M: shared_buffers (128M default) + WAL buffers + work_mem headroom.
+          # 384M caused checkpoint I/O spikes and page-cache eviction under 20+ VUs,
+          # making the measured latency reflect memory pressure rather than lock cost.
+          memory: "512M"
+        reservations:
+          cpus: "0.1"
+          memory: "256M"
+
+  # ── Perf-specific env overrides ───────────────────────────────────────────────
+  # bcrypt cost 10 (production default) takes ~400-600ms per hash at 0.3 CPU.
+  # At 20 req/s arrival rate that exceeds processing capacity in ~3s and fills
+  # the NATS pending queue (64 msgs), causing all subsequent requests to time out.
+  # Cost 4 (~1ms) benchmarks the INSERT + phone-check pipeline without bcrypt
+  # dominating — which is the actual throughput question for reg_throughput.
+  auth-service:
+    environment:
+      BCRYPT_ROUNDS: "4"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"      # matches auth-service-py
+          memory: "128M"
+        reservations:
+          cpus: "0.05"
+          memory: "64M"
+
+  account-service:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"      # matches account-service-py
+          memory: "128M"
+        reservations:
+          cpus: "0.05"
+          memory: "64M"
+
+  notification-service:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"      # matches notification-service-py
+          memory: "128M"
+        reservations:
+          cpus: "0.05"
+          memory: "64M"
+
+  # ── Infrastructure (uncapped — must not be the bottleneck) ───────────────────
+  # Kong, NATS, Redis intentionally have no limits here.
+  # They are shared plumbing; throttling them would skew results unfairly.

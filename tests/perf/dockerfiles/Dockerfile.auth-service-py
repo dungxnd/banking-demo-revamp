@@ -1,0 +1,11 @@
+FROM python:3.13-slim
+RUN apt-get update && apt-get install -y curl git && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ARG GIT_REF=origin/final
+COPY . /repo
+RUN git -C /repo archive ${GIT_REF} common services/auth-service | tar -x -C /app && \
+    mv /app/services/auth-service/* /app/ && rm -rf /app/services /repo
+RUN pip install --no-cache-dir -r /app/common/requirements.txt && \
+    chmod +x /app/entrypoint.sh
+EXPOSE 8001
+CMD ["./entrypoint.sh"]

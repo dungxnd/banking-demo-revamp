@@ -1,0 +1,441 @@
+
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Instana Agent Helm Chart — Config Reference</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #1f2328;
+    background: #ffffff;
+    padding: 24px 16px 48px;
+  }
+  .page { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .meta { color: #57606a; font-size: 13px; margin-bottom: 28px; }
+  .meta a { color: #3b82d4; text-decoration: none; }
+  h2 { font-size: 15px; font-weight: 700; margin: 28px 0 10px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; }
+  h3 { font-size: 13px; font-weight: 700; margin: 18px 0 6px; color: #57606a; text-transform: uppercase; letter-spacing: .04em; }
+  p { margin-bottom: 10px; }
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+  pre {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font-size: 12px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 18px; }
+  thead th {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    padding: 7px 10px;
+    text-align: left;
+    font-weight: 700;
+    color: #1f2328;
+  }
+  tbody td {
+    border: 1px solid #e5e7eb;
+    padding: 6px 10px;
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) td { background: #fafbfc; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 10px;
+    border: 1px solid;
+  }
+  .badge-req { background: #fff3cd; border-color: #d4a017; color: #7a5000; }
+  .badge-opt { background: #e6f0fb; border-color: #a8c8f0; color: #1a4a8a; }
+  .badge-local { background: #e6f7ec; border-color: #87d3a0; color: #195a2e; }
+  .badge-secret { background: #fde8e8; border-color: #f0a0a0; color: #7a0000; }
+  .callout {
+    background: #f0f7ff;
+    border-left: 3px solid #3b82d4;
+    padding: 10px 14px;
+    border-radius: 0 4px 4px 0;
+    margin-bottom: 14px;
+    font-size: 13px;
+  }
+  .callout.warn { background: #fff8e6; border-color: #d4a017; }
+  .callout.danger { background: #fdf0f0; border-color: #e05252; }
+  .section-card {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .section-card h3 { margin-top: 0; }
+  .toc { margin-bottom: 24px; }
+  .toc a { color: #3b82d4; text-decoration: none; font-size: 13px; }
+  .toc li { margin-bottom: 3px; }
+  footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid #e5e7eb;
+    text-align: center;
+    font-size: 12px;
+    color: #57606a;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Instana Agent Helm Chart</h1>
+  <div class="meta">
+    Chart <strong>v2.0.47</strong> · appVersion <strong>2.2.15</strong> · Operator <strong>v2.2.15</strong>
+     · 
+    <a href="https://github.com/instana/helm-charts/tree/main/instana-agent">github.com/instana/helm-charts</a>
+     ·  Repo: <code>https://agents.instana.io/helm</code>
+  </div>
+
+  
+  <nav class="toc">
+    <ol>
+      <li><a href="#overview">Overview &amp; Architecture</a></li>
+      <li><a href="#install">Install / Upgrade Commands</a></li>
+      <li><a href="#required">Required Values</a></li>
+      <li><a href="#agent-core">agent.* — Core Settings</a></li>
+      <li><a href="#agent-pod">agent.pod.* — Pod / Resource Settings</a></li>
+      <li><a href="#agent-env">agent.env / agent.configuration_yaml</a></li>
+      <li><a href="#k8s-sensor">k8s_sensor.* — Kubernetes Sensor Deployment</a></li>
+      <li><a href="#otel">OpenTelemetry &amp; Prometheus</a></li>
+      <li><a href="#rbac">RBAC, ServiceAccount, Service</a></li>
+      <li><a href="#controller">controllerManager.* — Operator</a></li>
+      <li><a href="#zones">Multi-Zone DaemonSets</a></li>
+      <li><a href="#project">Project Values (banking-demo)</a></li>
+      <li><a href="#upgrade-note">Upgrade Gotchas</a></li>
+    </ol>
+  </nav>
+
+  
+  <h2 id="overview">1. Overview &amp; Architecture</h2>
+  <div class="callout">
+    This chart deploys the Instana Agent as a <strong>privileged DaemonSet</strong> on every schedulable node.
+    Internally it creates a <strong>Kubernetes Operator</strong> (controller-manager) that reconciles an <code>Agent</code> CustomResource (CR) built from the Helm values.
+    The CRD must be applied manually before upgrades (see §12).
+  </div>
+
+  <div class="section-card">
+    <h3>Key Kubernetes Objects Created</h3>
+    <table>
+      <thead><tr><th>Resource</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>DaemonSet / instana-agent</code></td><td>Runs agent on every node for APM + infra monitoring</td></tr>
+        <tr><td><code>Deployment / instana-agent-controller-manager</code></td><td>Operator that reconciles the Agent CR</td></tr>
+        <tr><td><code>Deployment / instana-agent-k8sensor</code></td><td>Isolated Kubernetes-sensor pod(s) — enabled via <code>k8s_sensor.deployment.enabled: true</code></td></tr>
+        <tr><td><code>CRD / agents.instana.io</code></td><td>Custom resource definition; must be applied manually on upgrades</td></tr>
+        <tr><td><code>Secret / instana-agent-key</code></td><td>Stores agent key / download key (or BYO via <code>agent.keysSecret</code>)</td></tr>
+        <tr><td><code>Service / instana-agent</code></td><td>Exposes OTel gRPC:4317, HTTP:4318, Prometheus remote-write inside cluster</td></tr>
+        <tr><td><code>ClusterRole + Binding</code></td><td>RBAC for full cluster observability</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+  <h2 id="install">2. Install / Upgrade Commands</h2>
+
+  <h3>Initial Install</h3>
+  <pre>kubectl create namespace instana-agent
+
+helm install instana-agent \
+  --repo https://agents.instana.io/helm \
+  --namespace instana-agent \
+  --set agent.key="${INSTANA_AGENT_KEY}" \
+  --set agent.endpointHost="${INSTANA_ENDPOINT_HOST}" \
+  --set zone.name="ZONE_NAME" \
+  --set cluster.name="CLUSTER_NAME" \
+  instana-agent</pre>
+
+  <h3>Upgrade (with CRD pre-apply — required!)</h3>
+  <pre>helm pull --repo https://agents.instana.io/helm --untar instana-agent
+kubectl apply -f instana-agent/crds
+helm upgrade instana-agent instana-agent \
+  --namespace instana-agent \
+  --repo https://agents.instana.io/helm \
+  --reuse-values</pre>
+
+  <h3>Uninstall (manual CRD cleanup needed)</h3>
+  <pre>helm uninstall instana-agent -n instana-agent \
+  &amp;&amp; kubectl patch agent instana-agent -n instana-agent \
+     -p '{"metadata":{"finalizers":null}}' --type=merge \
+  &amp;&amp; kubectl delete crd/agents.instana.io</pre>
+
+  <h3>OpenShift pre-requisites</h3>
+  <pre>oc adm policy add-scc-to-user privileged -z instana-agent
+oc adm policy add-scc-to-user anyuid -z instana-agent-remote -n instana-agent</pre>
+
+  
+  <h2 id="required">3. Required Values</h2>
+  <table>
+    <thead><tr><th>Key</th><th>Description</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td><code>agent.key</code></td><td>Instana agent authentication key (from Instana UI)</td><td><span class="badge badge-req">REQUIRED</span></td></tr>
+      <tr><td><code>agent.endpointHost</code></td><td>Backend ingress hostname. US/ROW: <code>ingress-red-saas.instana.io</code>; EU: <code>ingress-blue-saas.instana.io</code></td><td><span class="badge badge-req">REQUIRED</span></td></tr>
+      <tr><td><code>zone.name</code> or <code>cluster.name</code></td><td>At least one must be set. If <code>cluster.name</code> is omitted, <code>zone.name</code> is used as cluster name.</td><td><span class="badge badge-req">REQUIRED</span></td></tr>
+    </tbody>
+  </table>
+
+  
+  <h2 id="agent-core">4. agent.* — Core Settings</h2>
+  <table>
+    <thead><tr><th>Key</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>agent.key</code></td><td><em>nil</em></td><td>Agent auth key <span class="badge badge-secret">SECRET</span></td></tr>
+      <tr><td><code>agent.downloadKey</code></td><td><em>nil</em></td><td>Download / sales key for on-prem artifact repo <span class="badge badge-secret">SECRET</span></td></tr>
+      <tr><td><code>agent.keysSecret</code></td><td><em>nil</em></td><td>BYO Kubernetes secret name (fields: <code>key</code>, optional <code>downloadKey</code>) — avoids Helm-managed secret</td></tr>
+      <tr><td><code>agent.endpointHost</code></td><td><em>nil</em></td><td>Backend hostname</td></tr>
+      <tr><td><code>agent.endpointPort</code></td><td><code>443</code></td><td>Backend port</td></tr>
+      <tr><td><code>agent.mode</code></td><td><code>APM</code></td><td>Agent mode: <code>APM</code> | <code>INFRASTRUCTURE</code> | <code>AWS</code></td></tr>
+      <tr><td><code>agent.listenAddress</code></td><td><code>*</code></td><td>IP the agent HTTP server listens on</td></tr>
+      <tr><td><code>agent.additionalBackends</code></td><td><code>[]</code></td><td>Extra backends: list of <code>{endpointHost, endpointPort, key}</code></td></tr>
+      <tr><td><code>agent.tls.secretName</code></td><td><em>nil</em></td><td>Existing <code>kubernetes.io/tls</code> secret for agent TLS</td></tr>
+      <tr><td><code>agent.tls.certificate</code></td><td><em>nil</em></td><td>Base64 cert (creates new TLS secret)</td></tr>
+      <tr><td><code>agent.tls.key</code></td><td><em>nil</em></td><td>Base64 private key (creates new TLS secret)</td></tr>
+      <tr><td><code>agent.image.name</code></td><td><code>icr.io/instana/agent</code></td><td>Agent container image</td></tr>
+      <tr><td><code>agent.image.tag</code></td><td><code>latest</code></td><td>Image tag (ignored if <code>digest</code> set)</td></tr>
+      <tr><td><code>agent.image.digest</code></td><td><em>nil</em></td><td>Image digest; takes precedence over tag</td></tr>
+      <tr><td><code>agent.image.pullPolicy</code></td><td><code>Always</code></td><td>Image pull policy</td></tr>
+      <tr><td><code>agent.image.pullSecrets</code></td><td><em>auto</em></td><td>Custom pull secrets; auto-created for <code>containers.instana.io</code> registry</td></tr>
+      <tr><td><code>agent.minReadySeconds</code></td><td><code>0</code></td><td>Seconds a pod must be ready before considered available</td></tr>
+      <tr><td><code>agent.updateStrategy.type</code></td><td><code>RollingUpdate</code></td><td><code>RollingUpdate</code> | <code>OnDelete</code></td></tr>
+      <tr><td><code>agent.updateStrategy.rollingUpdate.maxUnavailable</code></td><td><code>1</code></td><td>Max pods down during rolling update</td></tr>
+      <tr><td><code>agent.proxyHost</code></td><td><em>nil</em></td><td>Proxy hostname</td></tr>
+      <tr><td><code>agent.proxyPort</code></td><td><em>nil</em></td><td>Proxy port</td></tr>
+      <tr><td><code>agent.proxyProtocol</code></td><td><em>nil</em></td><td><code>http</code> | <code>socks4</code> | <code>socks5</code></td></tr>
+      <tr><td><code>agent.proxyUser</code></td><td><em>nil</em></td><td>Proxy username</td></tr>
+      <tr><td><code>agent.proxyPassword</code></td><td><em>nil</em></td><td>Proxy password <span class="badge badge-secret">SECRET</span></td></tr>
+      <tr><td><code>agent.proxyUseDNS</code></td><td><code>false</code></td><td>Proxy also resolves DNS</td></tr>
+      <tr><td><code>agent.serviceMesh.enabled</code></td><td><code>true</code></td><td>Enable Istio / OCP ServiceMesh JVM monitoring</td></tr>
+      <tr><td><code>agent.redactKubernetesSecrets</code></td><td><em>nil</em></td><td>Extra K8s secret field redaction</td></tr>
+      <tr><td><code>agent.host.repository</code></td><td><em>nil</em></td><td>Host path for agent Maven repository (dev/debug only)</td></tr>
+      <tr><td><code>agent.instanaMvnRepoUrl</code></td><td><em>nil</em></td><td>Maven repo proxy URL override</td></tr>
+      <tr><td><code>agent.agentReleaseRepoMirrorUrl</code></td><td><em>nil</em></td><td>Agent features repo mirror URL</td></tr>
+      <tr><td><code>agent.agentReleaseRepoMirrorUsername</code></td><td><em>nil</em></td><td>Mirror auth username</td></tr>
+      <tr><td><code>agent.agentReleaseRepoMirrorPassword</code></td><td><em>nil</em></td><td>Mirror auth password <span class="badge badge-secret">SECRET</span></td></tr>
+      <tr><td><code>agent.instanaSharedRepoMirrorUrl</code></td><td><em>nil</em></td><td>Agent shared repo mirror URL</td></tr>
+    </tbody>
+  </table>
+
+  
+  <h2 id="agent-pod">5. agent.pod.* — Pod &amp; Resource Settings</h2>
+  <table>
+    <thead><tr><th>Key</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>agent.pod.requests.cpu</code></td><td><code>0.5</code></td><td>CPU request per DaemonSet pod</td></tr>
+      <tr><td><code>agent.pod.requests.memory</code></td><td><code>768Mi</code></td><td>Memory request per DaemonSet pod</td></tr>
+      <tr><td><code>agent.pod.limits.cpu</code></td><td><code>1.5</code></td><td>CPU limit per DaemonSet pod</td></tr>
+      <tr><td><code>agent.pod.limits.memory</code></td><td><code>768Mi</code></td><td>Memory limit per DaemonSet pod</td></tr>
+      <tr><td><code>agent.pod.annotations</code></td><td><code>{}</code></td><td>Extra pod annotations</td></tr>
+      <tr><td><code>agent.pod.labels</code></td><td><code>{}</code></td><td>Extra pod labels</td></tr>
+      <tr><td><code>agent.pod.tolerations</code></td><td><code>[]</code></td><td>Tolerations for tainted nodes</td></tr>
+      <tr><td><code>agent.pod.affinity</code></td><td><code>{}</code></td><td>Affinity rules</td></tr>
+      <tr><td><code>agent.pod.nodeSelector</code></td><td><em>nil</em></td><td>Node selector labels</td></tr>
+      <tr><td><code>agent.pod.priorityClassName</code></td><td><em>nil</em></td><td>Existing PriorityClass name</td></tr>
+      <tr><td><code>agent.pod.volumes</code></td><td><code>[]</code></td><td>Additional volumes (e.g. certs)</td></tr>
+      <tr><td><code>agent.pod.volumeMounts</code></td><td><code>[]</code></td><td>Additional volume mounts</td></tr>
+      <tr><td><code>agent.pod.env</code></td><td><code>{}</code></td><td>Extra env vars using full Kubernetes syntax (valueFrom, secretKeyRef, fieldRef supported)</td></tr>
+      <tr><td><code>agent.pod.livenessProbe</code></td><td>delay=600s, timeout=5s, period=10s, fail=6</td><td>Override liveness probe settings for the agent container</td></tr>
+    </tbody>
+  </table>
+
+  
+  <h2 id="agent-env">6. agent.env / agent.configuration_yaml</h2>
+  <div class="section-card">
+    <h3>agent.env (legacy string-map)</h3>
+    <p>Simple key=value map for environment variables. Superseded by <code>agent.pod.env</code> which supports full Kubernetes syntax but both still work.</p>
+    <pre>agent:
+  env:
+    INSTANA_AGENT_TAGS: dev
+    INSTANA_GIT_REMOTE_REPOSITORY: "https://github.com/org/repo.git"
+    INSTANA_GIT_REMOTE_BRANCH: "main"
+    # INSTANA_GIT_REMOTE_USERNAME: set via --set at install time
+    INSTANA_GIT_REMOTE_PASSWORD: ""</pre>
+  </div>
+  <div class="section-card">
+    <h3>agent.configuration_yaml — Inline sensor config (hot-reloaded)</h3>
+    <p>Embeds the <code>configuration.yaml</code> content directly in the Helm values. The operator stores it in a Kubernetes <strong>Secret</strong> (not a ConfigMap), so plain-text passwords are never exposed after deployment. Changes require a <code>helm upgrade</code> OR can be hot-reloaded via the Instana Web API.</p>
+    <pre>agent:
+  configuration_yaml: |
+    # Secrets redaction
+    com.instana.secrets:
+      matcher: 'contains-ignore-case'
+      list:
+        - 'key'
+        - 'password'
+        - 'secret'
+
+    # Host tags
+    com.instana.plugin.host:
+      tags:
+        - 'dev'
+        - 'kubernetes'</pre>
+  </div>
+  <div class="callout">
+    <strong>Git-based config management (alternative):</strong> Set <code>INSTANA_GIT_REMOTE_REPOSITORY</code> / <code>INSTANA_GIT_REMOTE_BRANCH</code> / <code>INSTANA_GIT_REMOTE_USERNAME</code> env vars so the agent pulls <code>instana/configuration.yaml</code> from your Git repo on every startup — no <code>helm upgrade</code> needed for sensor config changes.
+  </div>
+
+  
+  <h2 id="k8s-sensor">7. k8s_sensor.* — Kubernetes Sensor Deployment</h2>
+  <p>When <code>k8s_sensor.deployment.enabled: true</code>, the Kubernetes sensor runs as a separate <strong>Deployment</strong> (HA, 3 replicas by default) instead of inside every DaemonSet pod. This reduces DaemonSet memory consumption significantly on large clusters.</p>
+  <table>
+    <thead><tr><th>Key</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>k8s_sensor.deployment.enabled</code></td><td><code>true</code></td><td>Isolate k8sensor into its own Deployment</td></tr>
+      <tr><td><code>k8s_sensor.deployment.replicas</code></td><td><code>3</code></td><td>HA replicas</td></tr>
+      <tr><td><code>k8s_sensor.deployment.minReadySeconds</code></td><td><code>0</code></td><td>Pod ready seconds threshold</td></tr>
+      <tr><td><code>k8s_sensor.image.name</code></td><td><code>icr.io/instana/k8sensor</code></td><td>k8sensor image</td></tr>
+      <tr><td><code>k8s_sensor.image.tag</code></td><td><code>latest</code></td><td>Image tag</td></tr>
+      <tr><td><code>k8s_sensor.image.digest</code></td><td><em>nil</em></td><td>Digest overrides tag</td></tr>
+      <tr><td><code>k8s_sensor.deployment.pod.requests.cpu</code></td><td><code>120m</code></td><td>CPU request</td></tr>
+      <tr><td><code>k8s_sensor.deployment.pod.requests.memory</code></td><td><code>128Mi</code></td><td>Memory request</td></tr>
+      <tr><td><code>k8s_sensor.deployment.pod.limits.cpu</code></td><td><code>500m</code></td><td>CPU limit</td></tr>
+      <tr><td><code>k8s_sensor.deployment.pod.limits.memory</code></td><td><code>2048Mi</code></td><td>Memory limit</td></tr>
+      <tr><td><code>k8s_sensor.deployment.pod.tolerations</code></td><td><code>[]</code></td><td>Tolerations</td></tr>
+      <tr><td><code>k8s_sensor.deployment.pod.nodeSelector</code></td><td><code>{}</code></td><td>Node selector</td></tr>
+      <tr><td><code>k8s_sensor.deployment.pod.priorityClassName</code></td><td><em>nil</em></td><td>PriorityClass</td></tr>
+      <tr><td><code>k8s_sensor.deployment.pod.affinity</code></td><td>soft anti-affinity</td><td>Default: prefer different nodes for HA</td></tr>
+      <tr><td><code>k8s_sensor.podDisruptionBudget.enabled</code></td><td><code>false</code></td><td>Create PodDisruptionBudget</td></tr>
+      <tr><td><code>k8s_sensor.pollrate</code></td><td><code>10s</code></td><td>K8s API polling interval</td></tr>
+      <tr><td><code>k8s_sensor.etcd.insecure</code></td><td><code>false</code></td><td>Skip TLS for ETCD connection</td></tr>
+      <tr><td><code>k8s_sensor.etcd.ca.secretName</code></td><td><em>nil</em></td><td>Secret with ETCD CA cert</td></tr>
+      <tr><td><code>k8s_sensor.etcd.ca.mountPath</code></td><td><em>nil</em></td><td>Mount path for ETCD CA</td></tr>
+      <tr><td><code>k8s_sensor.etcd.targets</code></td><td><em>nil</em></td><td>Explicit ETCD endpoints (vanilla K8s only)</td></tr>
+      <tr><td><code>k8s_sensor.restClient.hostAllowlist</code></td><td><em>nil</em></td><td>Allowed hosts for REST client connections</td></tr>
+      <tr><td><code>k8s_sensor.restClient.ca.secretName</code></td><td><em>nil</em></td><td>Secret with REST CA cert</td></tr>
+    </tbody>
+  </table>
+
+  
+  <h2 id="otel">8. OpenTelemetry &amp; Prometheus</h2>
+  <table>
+    <thead><tr><th>Key</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>opentelemetry.grpc.enabled</code></td><td><code>true</code></td><td>Accept OTel traces via gRPC (implies <code>service.create=true</code>)</td></tr>
+      <tr><td><code>opentelemetry.grpc.port</code></td><td><code>4317</code></td><td>OTel gRPC port</td></tr>
+      <tr><td><code>opentelemetry.http.enabled</code></td><td><code>true</code></td><td>Accept OTel traces via HTTP (implies <code>service.create=true</code>)</td></tr>
+      <tr><td><code>opentelemetry.http.port</code></td><td><code>4318</code></td><td>OTel HTTP port</td></tr>
+      <tr><td><code>prometheus.remoteWrite.enabled</code></td><td><code>false</code></td><td>Accept Prometheus remote_write metrics (implies <code>service.create=true</code>)</td></tr>
+    </tbody>
+  </table>
+  <p>OTel traffic from your app pods should point to <code>http://instana-agent.instana-agent.svc.cluster.local:4317</code> (gRPC) or <code>:4318</code> (HTTP).</p>
+
+  
+  <h2 id="rbac">9. RBAC, ServiceAccount &amp; Service</h2>
+  <table>
+    <thead><tr><th>Key</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>rbac.create</code></td><td><code>true</code></td><td>Create ClusterRole + Binding</td></tr>
+      <tr><td><code>service.create</code></td><td><code>true</code></td><td>Create internal Service (requires K8s 1.21+, <code>ServiceInternalTrafficPolicy</code>)</td></tr>
+      <tr><td><code>serviceAccount.create</code></td><td><code>true</code></td><td>Create ServiceAccount</td></tr>
+      <tr><td><code>serviceAccount.name</code></td><td><code>instana-agent</code></td><td>ServiceAccount name</td></tr>
+      <tr><td><code>serviceAccount.annotations</code></td><td><code>{}</code></td><td>SA annotations (e.g. IRSA)</td></tr>
+      <tr><td><code>useSecretMounts</code></td><td><code>true</code></td><td>Mount secrets as files instead of env vars — hides credentials from process listings</td></tr>
+      <tr><td><code>podSecurityPolicy.enable</code></td><td><code>false</code></td><td>Authorize PodSecurityPolicy (K8s &lt; v1.25 only)</td></tr>
+      <tr><td><code>openshift</code></td><td>auto-detect</td><td>Force-enable OpenShift RBAC tweaks</td></tr>
+    </tbody>
+  </table>
+
+  
+  <h2 id="controller">10. controllerManager.* — Operator Image</h2>
+  <table>
+    <thead><tr><th>Key</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>controllerManager.image.name</code></td><td><code>icr.io/instana/instana-agent-operator</code></td><td>Operator image</td></tr>
+      <tr><td><code>controllerManager.image.tag</code></td><td><code>2.2.15</code></td><td>Operator version (pinned to chart appVersion)</td></tr>
+      <tr><td><code>controllerManager.image.pullPolicy</code></td><td><code>Always</code></td><td>Pull policy</td></tr>
+      <tr><td><code>controllerManager.image.pullSecrets</code></td><td><code>[]</code></td><td>Image pull secrets</td></tr>
+      <tr><td><code>controllerManager.resources</code></td><td><em>nil</em></td><td>limits.cpu / limits.memory / requests.cpu / requests.memory (added in 2.0.24)</td></tr>
+      <tr><td><code>controllerManager.pod.tolerations</code></td><td><em>nil</em></td><td>Tolerations for operator pod (added in 2.0.40)</td></tr>
+    </tbody>
+  </table>
+
+  
+  <h2 id="zones">11. Multi-Zone DaemonSets</h2>
+  <p>Deploy separate DaemonSets per node pool using tolerations as the basis for zone association:</p>
+  <pre>zones:
+  - name: pool-01
+    tolerations:
+    - key: "pool"
+      operator: "Equal"
+      value: "pool-01"
+      effect: "NoExecute"
+  - name: pool-02
+    tolerations:
+    - key: "pool"
+      operator: "Equal"
+      value: "pool-02"
+      effect: "NoExecute"</pre>
+
+  
+  <h2 id="project">12. Project Values — banking-demo (golang branch)</h2>
+  <div class="callout badge-local" style="border-color:#87d3a0;background:#e6f7ec">
+    Current values in <code>instana/helm-agent-values.yaml</code> — checked into repo on the <strong>golang</strong> branch.
+  </div>
+  <table>
+    <thead><tr><th>Key</th><th>Value</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>agent.endpointPort</code></td><td><code>443</code></td><td>Committed — standard</td></tr>
+      <tr><td><code>agent.key</code></td><td><em>--set at deploy</em></td><td><span class="badge badge-secret">SECRET — never committed</span></td></tr>
+      <tr><td><code>agent.downloadKey</code></td><td><em>--set at deploy</em></td><td><span class="badge badge-secret">SECRET — never committed</span></td></tr>
+      <tr><td><code>agent.endpointHost</code></td><td><em>--set at deploy</em></td><td><span class="badge badge-secret">SECRET — never committed</span></td></tr>
+      <tr><td><code>agent.env.INSTANA_GIT_REMOTE_REPOSITORY</code></td><td><code>https://github.com/DungxND/banking-demo.git</code></td><td>Git-based config pull</td></tr>
+      <tr><td><code>agent.env.INSTANA_GIT_REMOTE_BRANCH</code></td><td><code>golang</code></td><td>Tracks this branch</td></tr>
+      <tr><td><code>agent.env.INSTANA_GIT_REMOTE_USERNAME</code></td><td><em>--set at deploy (GitHub PAT)</em></td><td><span class="badge badge-secret">SECRET</span></td></tr>
+      <tr><td><code>agent.env.INSTANA_GIT_REMOTE_PASSWORD</code></td><td><code>""</code></td><td>Intentionally empty — GitHub uses PAT as username</td></tr>
+      <tr><td><code>cluster.name</code></td><td><code>banking-demo-k3s</code></td><td>K3s cluster display name</td></tr>
+      <tr><td><code>zone.name</code></td><td><code>banking-dung-ec2</code></td><td>Custom zone name</td></tr>
+      <tr><td><code>k8s_sensor.deployment.enabled</code></td><td><code>true</code></td><td>Isolated k8sensor Deployment for HA</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <strong>Hot-reload without helm upgrade:</strong> After a config-only git push to the <code>golang</code> branch, trigger a hot-reload via the GitHub Actions workflow at <code>.github/workflows/instana-gitops.yml</code> which calls the Instana Web API to reload all agents in zone <code>banking-dung-ec2</code>.
+  </div>
+  <h3>Deploy via Ansible (recommended)</h3>
+  <pre>./deploy.sh -p install-instana.yml \
+  -e agent_key="$INSTANA_AGENT_KEY" \
+  -e agent_download_key="$INSTANA_DOWNLOAD_KEY" \
+  -e endpoint_host="$INSTANA_ENDPOINT_HOST" \
+  -e git_token="$GITHUB_TOKEN"</pre>
+
+  
+  <h2 id="upgrade-note">13. Upgrade Gotchas</h2>
+  <div class="callout danger">
+    <strong>CRDs are NOT auto-updated on helm upgrade.</strong> You must manually apply <code>kubectl apply -f instana-agent/crds</code> before every upgrade, especially when migrating from chart v1 → v2.
+  </div>
+  <table>
+    <thead><tr><th>Scenario</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td>Sensor config change only</td><td>Git push → trigger Web API hot-reload (no helm needed)</td></tr>
+      <tr><td>Helm values change (resources, zones, k8s_sensor etc.)</td><td><code>helm upgrade --reuse-values -f values.yaml</code></td></tr>
+      <tr><td>Chart version upgrade</td><td>Pre-apply CRDs, then <code>helm upgrade</code></td></tr>
+      <tr><td>v1 → v2 migration</td><td>Run <code>convert-agent-configmap-to-custom-values.sh</code> first, then pre-apply CRDs</td></tr>
+      <tr><td>Manual ConfigMap edits (v1)</td><td>Use <code>convert-agent-configmap-to-custom-values.sh</code> to extract to <code>custom-values.yaml</code></td></tr>
+      <tr><td>Full uninstall</td><td>Helm uninstall + patch finalizers + delete CRD (manual)</td></tr>
+    </tbody>
+  </table>
+
+  <footer>Made with IBM Bob</footer>
+</div>
+</body>
+</html>

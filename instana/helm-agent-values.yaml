@@ -1,0 +1,69 @@
+# instana/helm-agent-values.yaml
+#
+# Helm values for the Instana DaemonSet agent — banking-demo golang branch.
+#
+# Sensor configuration is managed via Git-based configuration management.
+# The agent DaemonSet pulls instana/configuration.yaml directly from this
+# repository on every startup, so a helm upgrade is NOT required when only
+# sensor config changes (e.g. passwords, hosts, poll rates).
+#
+# Git credentials are passed at install time via --set (never committed):
+#
+#   helm upgrade --install instana-agent \
+#     --repo https://agents.instana.io/helm \
+#     --namespace instana-agent --create-namespace \
+#     -f instana/helm-agent-values.yaml \
+#     --set agent.key="${INSTANA_AGENT_KEY}" \
+#     --set agent.downloadKey="${INSTANA_DOWNLOAD_KEY}" \
+#     --set agent.endpointHost="${INSTANA_ENDPOINT_HOST}" \
+#     --set agent.env.INSTANA_GIT_REMOTE_USERNAME="${GITHUB_TOKEN}" \
+#     instana-agent
+#
+# Via Ansible (recommended):
+#   ./deploy.sh -p install-instana.yml \
+#     -e agent_key="$INSTANA_AGENT_KEY" \
+#     -e agent_download_key="$INSTANA_DOWNLOAD_KEY" \
+#     -e endpoint_host="$INSTANA_ENDPOINT_HOST" \
+#     -e git_token="$GITHUB_TOKEN"
+#
+# Config reload without helm upgrade (after a config-only git push):
+#   Use the GitHub Actions workflow at .github/workflows/instana-gitops.yml
+#   which calls the Instana Web API to trigger a hot-reload on all agents
+#   matching zone:banking-dung-ec2.
+#
+# See instana/docs/13-k8s-agent-install.md for full reference.
+
+agent:
+  # agent.key, agent.downloadKey, and agent.endpointHost must be supplied at
+  # install time via --set — never committed to git.
+  endpointPort: 443
+
+  # ── Git-based configuration management ──────────────────────────────────
+  # The agent pulls instana/configuration.yaml from this repo on every
+  # startup and on every reload triggered via the Instana Web API.
+  #
+  # INSTANA_GIT_REMOTE_REPOSITORY and INSTANA_GIT_REMOTE_BRANCH are static
+  # and safe to commit. INSTANA_GIT_REMOTE_USERNAME (GitHub PAT with repo:read
+  # scope) must be passed at install time via --set agent.env.INSTANA_GIT_REMOTE_USERNAME.
+  # INSTANA_GIT_REMOTE_PASSWORD is intentionally empty — GitHub expects the
+  # PAT as the username with an empty password for basic authentication.
+  #
+  # Required repo structure (already in place):
+  #   instana/
+  #   └── configuration.yaml   ← pulled to instanaAgentDir/etc/instana/
+  env:
+    INSTANA_GIT_REMOTE_REPOSITORY: "https://github.com/DungxND/banking-demo.git"
+    INSTANA_GIT_REMOTE_BRANCH: "golang"
+    # INSTANA_GIT_REMOTE_USERNAME: supplied via --set at install time (GitHub PAT)
+    INSTANA_GIT_REMOTE_PASSWORD: ""
+
+cluster:
+  name: banking-demo-k3s
+
+zone:
+  name: banking-dung-ec2
+
+k8s_sensor:
+  deployment:
+    enabled: true
+    replicas: 1

@@ -1,0 +1,147 @@
+name: K8s Deploy
+
+on:
+  push:
+    branches: [final]
+    paths:
+      - 'helm/**'
+      - 'instana/configuration.yaml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      helm_extra_args:
+        description: 'Extra helm --set args (space-separated, e.g. "--set frontend.image.tag=abc123")'
+        required: false
+        default: ''
+        type: string
+
+env:
+  NAMESPACE: banking
+  RELEASE: banking-demo
+
+jobs:
+  # ── 1. Determine what changed ───────────────────────────────────────────────
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_helm: ${{ steps.filter.outputs.helm }}
+      sync_instana: ${{ steps.filter.outputs.instana }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            helm:
+              - 'helm/**'
+            instana:
+              - 'instana/configuration.yaml'
+
+  # ── 2. Helm upgrade ─────────────────────────────────────────────────────────
+  helm-deploy:
+    name: Helm upgrade
+    runs-on: ubuntu-latest
+    needs: prepare
+    if: >
+      needs.prepare.outputs.deploy_helm == 'true' ||
+      github.event_name == 'workflow_dispatch'
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Verify cluster connectivity
+        run: kubectl cluster-info --request-timeout=10s
+
+      - name: Helm upgrade (--install, atomic)
+        run: |
+          helm upgrade --install "${{ env.RELEASE }}" ./helm \
+            --namespace "${{ env.NAMESPACE }}" \
+            --create-namespace \
+            --atomic \
+            --timeout 5m \
+            --set global.imageTag="$(git rev-parse --short=7 HEAD)" \
+            ${{ github.event.inputs.helm_extra_args }}
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment \
+            --namespace "${{ env.NAMESPACE }}" \
+            --timeout=3m
+
+      - name: Write deploy summary
+        if: always()
+        run: |
+          {
+            echo "## Helm Deploy"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Release** | \`${{ env.RELEASE }}\` |"
+            echo "| **Namespace** | \`${{ env.NAMESPACE }}\` |"
+            echo "| **Environment** | ${{ github.event.inputs.environment || 'staging' }} |"
+            echo "| **Commit** | \`${{ github.sha }}\` |"
+            echo "| **Result** | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 3. Sync Instana agent config ────────────────────────────────────────────
+  instana-sync:
+    name: Sync Instana config
+    runs-on: ubuntu-latest
+    needs: prepare
+    if: >
+      needs.prepare.outputs.sync_instana == 'true' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push instana/configuration.yaml to agent host
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/banking-demo
+            git fetch origin final
+            git checkout origin/final -- instana/configuration.yaml
+            # Restart the Instana agent to pick up the new config
+            sudo systemctl restart instana-agent || true
+            echo "Instana config synced at $(date)"
+
+      - name: Write sync summary
+        if: always()
+        run: |
+          {
+            echo "## Instana Config Sync"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Host** | \`${{ secrets.EC2_HOST }}\` |"
+            echo "| **Commit** | \`${{ github.sha }}\` |"
+            echo "| **Result** | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

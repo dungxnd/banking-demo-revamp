@@ -1,0 +1,144 @@
+# Instana Agent configuration for banking-demo — Kubernetes (k3s on EC2)
+# Mount at: /opt/instana/agent/etc/instana/configuration.yaml
+#
+# Hot-reloaded: most settings take effect without agent restart.
+# Merge order: configuration-*.yaml files merged alphabetically.
+
+# ---------------------------------------------------------------------------
+# Zone — groups this host in the Application Perspective filter drop-downs.
+# ---------------------------------------------------------------------------
+com.instana.zone:
+  name: banking-ec2-prod
+
+# ---------------------------------------------------------------------------
+# Host tags — additional filter dimensions in the AP builder
+# ---------------------------------------------------------------------------
+com.instana.tags:
+  - environment: production
+  - team: banking
+  - project: banking-demo
+
+# ---------------------------------------------------------------------------
+# Kubernetes — host-agent mode (systemd on EC2, NOT Helm/Operator).
+#
+# With a host-agent install, there is NO k8sensor Deployment in the cluster.
+# The host agent itself monitors Kubernetes by reading the kubeconfig directly.
+# enabled: true is required — without it, no pods/services/namespaces are
+# reported to Instana at all.
+#
+# The k8sensor Deployment (kubectl get deployments -l app=k8sensor) only exists
+# when the agent is installed via Helm or the Operator — not applicable here.
+#
+# Prerequisite: kubeconfig must be world-readable:
+#   sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+# ---------------------------------------------------------------------------
+com.instana.plugin.kubernetes:
+  enabled: true
+  kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+# ---------------------------------------------------------------------------
+# Nginx — name the frontend service explicitly so it appears as 'frontend'
+# rather than 'nginx' or 'unspecified' in the Instana UI.
+# The agent matches by the process binary name detected inside the container.
+# ---------------------------------------------------------------------------
+com.instana.plugin.nginx:
+  service_name: frontend
+
+# ---------------------------------------------------------------------------
+# Traefik sensor — auto-deployed by the agent; poll_rate controls scrape interval
+# ---------------------------------------------------------------------------
+com.instana.plugin.traefik:
+  enabled: true
+  poll_rate: 1
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry — accept OTLP from pods (gRPC :4317, HTTP :4318)
+# The agent must listen on 0.0.0.0 so pods on the k3s CNI network
+# (10.42.x.x) can reach it via the node IP (status.hostIP).
+# Without explicit grpc.listenAddress, the agent defaults to localhost only.
+# ---------------------------------------------------------------------------
+com.instana.plugin.opentelemetry:
+  enabled: true
+  grpc:
+    enabled: true
+    listenAddress: "0.0.0.0:4317"
+  http:
+    enabled: true
+    listenAddress: "0.0.0.0:4318"
+
+# ---------------------------------------------------------------------------
+# Python — enable agent-side Python process detection
+# ---------------------------------------------------------------------------
+com.instana.plugin.python:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# PostgreSQL monitoring
+# Requires track_counts, track_activities, track_io_timing ON in postgresql.conf
+# ---------------------------------------------------------------------------
+com.instana.plugin.postgresql:
+  user: banking
+  password: bankingpass
+  database: banking
+
+# ---------------------------------------------------------------------------
+# Kong API Gateway monitoring
+# Remote mode — agent is on the host, Kong admin is inside the cluster.
+# Kong admin is exposed via NodePort 32001 so the host agent reaches it
+# via localhost (no k8s DNS resolution needed from the host).
+# No auth — Kong runs in DB-less mode with no RBAC.
+# Prometheus plugin must be enabled in kong-configmap.yaml (it is).
+# poll_rate minimum is 30s per Instana docs.
+# disabled_metrics is empty — collect everything for the demo.
+# ---------------------------------------------------------------------------
+com.instana.plugin.kong:
+  enabled: true
+  dataset_size: 10
+  status_code_group: '2xx,3xx,4xx,5xx'
+  remote:
+    - host: '127.0.0.1'
+      port: '32001'        # Admin API port — sensor reads topology/config here
+      availabilityZone: 'banking-ec2-prod'
+      poll_rate: 30
+      protocol: 'http'
+
+# ---------------------------------------------------------------------------
+# Redis monitoring
+# No password — banking-demo Redis runs without auth (default config).
+# poll_rate: 10s is sufficient for a demo; drop to 1 for high-fidelity metrics.
+# CONFIG command must not be disabled or renamed on the Redis side.
+# Redis is exposed via NodePort 32002 so the host agent reaches it via
+# localhost (no k8s DNS resolution needed from the host, no hardcoded pod IP).
+# ---------------------------------------------------------------------------
+com.instana.plugin.redis:
+  username: ''
+  password: ''
+  poll_rate: 10
+  hosts:
+    - host: '127.0.0.1'
+      port: 32002
+
+# ---------------------------------------------------------------------------
+# Tracing — forward OTel traceparent/tracestate headers across services,
+# and accept spans forwarded by Traefik (instana-t / instana-s / x-instana-*)
+# ---------------------------------------------------------------------------
+com.instana.tracing:
+  extra-http-headers:
+    - traceparent
+    - tracestate
+    - x-instana-t
+    - x-instana-s
+    - x-instana-l
+
+# ---------------------------------------------------------------------------
+# Secrets — redact sensitive keys from collected config/env data
+# ---------------------------------------------------------------------------
+com.instana.secrets:
+  matcher: contains-ignore-case
+  list:
+    - password
+    - secret
+    - key
+    - token
+    - DATABASE_URL
+    - REDIS_URL

@@ -1,0 +1,160 @@
+# Instana Agent configuration for banking-demo — /final stack (Helm on k3s / EC2)
+# Mount at: /opt/instana/agent/etc/instana/configuration.yaml
+#
+# Hot-reloaded: most settings take effect without agent restart.
+# Merge order: configuration-*.yaml files merged alphabetically.
+
+# ---------------------------------------------------------------------------
+# Zone — groups this host in the Application Perspective filter drop-downs.
+# ---------------------------------------------------------------------------
+com.instana.zone:
+  name: banking-ec2-prod
+
+# ---------------------------------------------------------------------------
+# Host tags — additional filter dimensions in the AP builder
+# ---------------------------------------------------------------------------
+com.instana.tags:
+  - environment: production
+  - team: banking
+  - project: banking-demo
+
+# ---------------------------------------------------------------------------
+# Kubernetes — host-agent mode (systemd on EC2, NOT Helm/Operator).
+#
+# With a host-agent install, there is NO k8sensor Deployment in the cluster.
+# The host agent itself monitors Kubernetes by reading the kubeconfig directly.
+# enabled: true is required — without it, no pods/services/namespaces are
+# reported to Instana at all.
+# ---------------------------------------------------------------------------
+com.instana.plugin.kubernetes:
+  enabled: true
+  kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+# ---------------------------------------------------------------------------
+# Nginx — name the frontend service explicitly so it appears as 'frontend'
+# rather than 'nginx' or 'unspecified' in the Instana UI.
+# The /final frontend pod runs nginx; the agent matches by binary name.
+# ---------------------------------------------------------------------------
+com.instana.plugin.nginx:
+  service_name: frontend
+
+# ---------------------------------------------------------------------------
+# Traefik sensor — k3s ships Traefik as the default ingress controller.
+# The /final stack keeps it running alongside Kong (Kong uses hostPort 80,
+# Traefik is disabled or not used for app traffic but still runs in k3s).
+# ---------------------------------------------------------------------------
+com.instana.plugin.traefik:
+  enabled: true
+  poll_rate: 1
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry — accept OTLP from pods (gRPC :4317, HTTP :4318).
+# Services instrument via opentelemetry-sdk and export to status.hostIP.
+# The agent binds to 0.0.0.0 by default when grpc/http are enabled.
+# Use 'port' to configure the port number (not 'listenAddress' — invalid key).
+# ---------------------------------------------------------------------------
+com.instana.plugin.opentelemetry:
+  grpc:
+    enabled: true
+    port: 4317
+  http:
+    enabled: true
+    port: 4318
+
+# ---------------------------------------------------------------------------
+# Python — enable agent-side Python process detection.
+# /final services (auth, account, transfer, notification, api-producer) are
+# all FastAPI / Python processes running inside containers.
+# ---------------------------------------------------------------------------
+com.instana.plugin.python:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# PostgreSQL monitoring
+# /final: user=banking, db=banking — same credentials as previous stack.
+# Service is headless ClusterIP (port 5432, no NodePort).
+# The host agent cannot reach it directly from the EC2 host; monitoring is
+# done via the Kubernetes in-process sensor (pod/container metrics) and
+# OTel traces from the services. Leave the block here for completeness;
+# remove if the agent logs connection errors.
+# Requires track_counts, track_activities, track_io_timing ON in postgresql.conf
+# ---------------------------------------------------------------------------
+com.instana.plugin.postgresql:
+  user: banking
+  password: bankingpass
+  database: banking
+
+# ---------------------------------------------------------------------------
+# Kong API Gateway monitoring
+# /final: KONG_ADMIN_LISTEN is bound to 127.0.0.1:8001 inside the container.
+# The host agent running on the EC2 node cannot reach it — neither as a
+# remote host nor via local process discovery. The prometheus global plugin
+# is enabled in kong values.yaml; Kong metrics reach Instana via OTel/OTLP
+# spans from the Python services that call Kong routes.
+#
+# To enable when Kong admin becomes reachable (e.g. via a debug NodePort):
+#   com.instana.plugin.kong:
+#     enabled: true
+#     dataset_size: 10
+#     status_code_group: '2xx,3xx,4xx,5xx'
+#     remote:
+#       - host: '127.0.0.1'
+#         port: '8001'
+#         availabilityZone: 'banking-ec2-prod'
+#         poll_rate: 30
+#         protocol: 'http'
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Redis monitoring
+# /final: Redis is a headless ClusterIP StatefulSet (port 6379, no NodePort).
+# The host agent on the EC2 node cannot reach the Redis pod.
+# Client-side tracing (opentelemetry-instrumentation-redis) in the Python
+# services produces Redis spans that flow to Instana via OTLP.
+#
+# To enable when Redis is reachable (e.g. via a debug NodePort at 32002):
+#   com.instana.plugin.redis:
+#     username: ''
+#     password: ''
+#     poll_rate: 10
+#     hosts:
+#       - host: '127.0.0.1'
+#         port: 32002
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# RabbitMQ monitoring
+# /final: Agent auto-discovered RabbitMQ at 10.42.0.131:15672 (confirmed in
+# agent log: "RabbitMQ API http://10.42.0.131:15672 is reachable").
+# Credentials match the rabbitmq-connection-secret (banking/bankingpass).
+# ---------------------------------------------------------------------------
+com.instana.plugin.rabbitmq:
+  user: 'banking'
+  password: 'bankingpass'
+  poll_rate: 5
+
+# ---------------------------------------------------------------------------
+# Tracing — forward OTel traceparent/tracestate headers across services,
+# and accept spans forwarded by Kong (instana-t / instana-s / x-instana-*)
+# ---------------------------------------------------------------------------
+com.instana.tracing:
+  extra-http-headers:
+    - traceparent
+    - tracestate
+    - x-instana-t
+    - x-instana-s
+    - x-instana-l
+
+# ---------------------------------------------------------------------------
+# Secrets — redact sensitive keys from collected config/env data
+# ---------------------------------------------------------------------------
+com.instana.secrets:
+  matcher: contains-ignore-case
+  list:
+    - password
+    - secret
+    - key
+    - token
+    - DATABASE_URL
+    - REDIS_URL
+    - RABBITMQ_URL

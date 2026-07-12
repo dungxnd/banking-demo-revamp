@@ -1,0 +1,71 @@
+# perf/docker-compose.nocap.override.yml
+# Uncapped resource override for SERVICE THROUGHPUT (capacity) testing.
+#
+# ── Purpose ───────────────────────────────────────────────────────────────────
+# Replaces docker-compose.override.yml when running SCENARIO=capacity.
+# All CPU/memory limits are removed so the measured bottleneck is the service
+# code and its concurrency model, not a container resource cap.
+#
+# With caps removed:
+#   - transfer-service saturates on: goroutine/coroutine scheduling, NATS/AMQP
+#     round-trip overhead, connection pool size, or serialization cost.
+#   - postgres saturates on: lock waits, WAL throughput, connection pool.
+#   - The RPS at which transfer_errors climbs past 2% OR transfer_latency p95
+#     exceeds 1500ms is the TRUE service throughput ceiling.
+#
+# ── How to use ────────────────────────────────────────────────────────────────
+# Go stack capacity run (from repo root):
+#   podman compose \
+#     -f docker-compose.yml \
+#     -f tests/perf/docker-compose.nocap.override.yml \
+#     up -d
+#
+#   podman run --rm --network=host \
+#     -v "$(pwd)/tests/perf/k6:/scripts" \
+#     -e STACK_TYPE=go -e BASE_URL=http://localhost:8000 \
+#     -e SCENARIO=capacity \
+#     -e CAP_MAX_RATE=300 -e CAP_RAMP_DURATION=120s \
+#     -e N_USERS=100 \
+#     grafana/k6:latest run /scripts/scenario.js
+#
+# ── Interpreting results ──────────────────────────────────────────────────────
+# Watch transfer_latency p95 and transfer_errors rate in the output.
+# The throughput ceiling is the req/s at which either first breaches its SLO:
+#   - transfer_latency p95 > 1500ms  → latency cliff (service or DB saturated)
+#   - transfer_errors    > 2%        → hard errors (connection refused, timeouts)
+# Compare the two stacks at the same CAP_MAX_RATE to see which holds the SLO longer.
+#
+# ── Warning ───────────────────────────────────────────────────────────────────
+# Running this on a constrained host (e.g. WSL2 with 2 GB RAM) may cause the
+# host to swap. Limit CAP_MAX_RATE to a value you expect the host to sustain.
+# For a 7 vCPU / 4 GB WSL2 VM, start at CAP_MAX_RATE=100 and double until you
+# see errors. Do NOT use this file for the Go vs Python comparison runs — use
+# docker-compose.override.yml for those.
+
+services:
+  # Remove all caps from the services under test.
+  # Infrastructure (Kong, NATS, Redis) was already uncapped in the base override.
+
+  api-producer:
+    deploy:
+      resources: {}
+
+  transfer-service:
+    deploy:
+      resources: {}
+
+  postgres:
+    deploy:
+      resources: {}
+
+  auth-service:
+    deploy:
+      resources: {}
+
+  account-service:
+    deploy:
+      resources: {}
+
+  notification-service:
+    deploy:
+      resources: {}

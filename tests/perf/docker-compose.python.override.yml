@@ -1,0 +1,94 @@
+# perf/docker-compose.python.override.yml
+# Resource caps for the Python stack (origin/final) stress testing.
+# Tuned for: Intel Core Ultra 5 235U, Podman WSL2 VM = 7 vCPU / 2 GB RAM.
+#
+# ── Benchmark goal — Go vs Python comparison ──────────────────────────────────
+# Caps are IDENTICAL to docker-compose.override.yml (Go stack) — symmetry is
+# the only reason they exist. See that file for full rationale and isolation-run
+# instructions.
+#
+# ── When to REMOVE the Postgres cap (isolation runs) ─────────────────────────
+# To separate "READ COMMITTED + asyncio overhead" from "DB CPU pressure":
+#   postgres-py:
+#     deploy:
+#       resources: {}   # or delete the deploy block entirely
+#
+# ── Infrastructure (Kong, RabbitMQ, Redis) stays UNCAPPED ────────────────────
+# Throttling shared plumbing would skew results unfairly.
+
+services:
+
+  # ── Services under test (capped symmetrically with Go stack) ─────────────────
+
+  api-producer-py:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"      # matches api-producer
+          memory: "128M"
+        reservations:
+          cpus: "0.05"
+          memory: "64M"
+
+  transfer-service-py:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"     # ← matches Go transfer-service — fair comparison
+          memory: "256M"
+        reservations:
+          cpus: "0.1"
+          memory: "128M"
+
+  postgres-py:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"     # ← matches Go postgres — fair comparison
+          # 512M: matches Go postgres cap. See docker-compose.override.yml for why
+          # 384M is too tight (checkpoint I/O spikes under 20+ VUs).
+          memory: "512M"
+        reservations:
+          cpus: "0.1"
+          memory: "256M"
+
+  # ── Perf-specific env overrides ───────────────────────────────────────────────
+  # bcrypt cost 10 (production default) takes ~400-600ms per hash at 0.3 CPU.
+  # At 20 req/s that exceeds processing capacity in ~3s and fills the RabbitMQ
+  # consumer queue, causing request timeouts.
+  # Cost 4 (~1ms) benchmarks the INSERT pipeline without bcrypt dominating.
+  auth-service-py:
+    environment:
+      BCRYPT_ROUNDS: "4"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"      # matches auth-service
+          memory: "128M"
+        reservations:
+          cpus: "0.05"
+          memory: "64M"
+
+  account-service-py:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"      # matches account-service
+          memory: "128M"
+        reservations:
+          cpus: "0.05"
+          memory: "64M"
+
+  notification-service-py:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"      # matches notification-service
+          memory: "128M"
+        reservations:
+          cpus: "0.05"
+          memory: "64M"
+
+  # ── Infrastructure (uncapped — must not be the bottleneck) ───────────────────
+  # Kong, RabbitMQ, Redis intentionally have no limits here.
+  # They are shared plumbing; throttling them would skew results unfairly.

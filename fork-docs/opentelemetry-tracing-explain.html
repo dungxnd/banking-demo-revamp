@@ -1,0 +1,323 @@
+
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; font-size: 14px; line-height: 1.6; color: #1f2328; background: #ffffff; padding: 32px; max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  h2 { font-size: 15px; font-weight: 700; margin: 28px 0 10px; color: #1f2328; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+  h3 { font-size: 13px; font-weight: 700; margin: 16px 0 6px; color: #3b82d4; }
+  p { margin-bottom: 10px; color: #1f2328; }
+  .subtitle { color: #57606a; font-size: 13px; margin-bottom: 24px; }
+  code { font-family: "Cascadia Code", "Fira Code", "Courier New", monospace; font-size: 12px; background: #f7f8fa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 1px 5px; }
+  pre { background: #f7f8fa; border: 1px solid #e5e7eb; border-radius: 6px; padding: 14px 16px; font-size: 12px; font-family: "Cascadia Code", "Courier New", monospace; overflow-x: auto; margin: 10px 0 14px; line-height: 1.7; }
+  .comment { color: #57606a; }
+  .kw { color: #cf222e; }
+  .fn { color: #8250df; }
+  .str { color: #0a3069; }
+  .num { color: #0550ae; }
+
+  /* Trace diagram */
+  .trace-wrap { background: #f7f8fa; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin: 14px 0; }
+  .trace-row { display: flex; align-items: center; margin-bottom: 8px; }
+  .trace-label { width: 140px; font-size: 12px; font-weight: 600; color: #57606a; flex-shrink: 0; }
+  .trace-bar-wrap { flex: 1; position: relative; height: 26px; }
+  .trace-bar { position: absolute; height: 100%; border-radius: 4px; display: flex; align-items: center; padding: 0 8px; font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; }
+  .bar-kong    { background: #57606a; left: 0%;   width: 100%; }
+  .bar-prod    { background: #3b82d4; left: 8%;   width: 78%; }
+  .bar-svc     { background: #7c5cd8; left: 30%;  width: 40%; }
+  .bar-missing { background: #e5e7eb; border: 2px dashed #cf222e; left: 30%; width: 40%; color: #cf222e; }
+  .trace-title { font-size: 11px; font-weight: 700; color: #57606a; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  /* Boxes */
+  .box { border-radius: 8px; padding: 14px 16px; margin: 12px 0; }
+  .box-blue  { background: #eff6ff; border: 1px solid #bfdbfe; }
+  .box-red   { background: #fff5f5; border: 1px solid #fecaca; }
+  .box-green { background: #f0fdf4; border: 1px solid #bbf7d0; }
+  .box-amber { background: #fffbeb; border: 1px solid #fde68a; }
+  .box h3 { margin-top: 0; }
+
+  /* Definition table */
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  th { text-align: left; background: #f7f8fa; border: 1px solid #e5e7eb; padding: 8px 12px; font-weight: 700; font-size: 12px; color: #57606a; text-transform: uppercase; letter-spacing: 0.04em; }
+  td { border: 1px solid #e5e7eb; padding: 8px 12px; vertical-align: top; }
+  tr:nth-child(even) td { background: #fafbfc; }
+
+  /* Step list */
+  .steps { counter-reset: step; list-style: none; margin: 10px 0 14px; }
+  .steps li { counter-increment: step; display: flex; gap: 12px; margin-bottom: 10px; }
+  .steps li::before { content: counter(step); min-width: 22px; height: 22px; border-radius: 50%; background: #3b82d4; color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; flex-shrink: 0; margin-top: 2px; }
+
+  /* Diff */
+  .diff { background: #f7f8fa; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; margin: 12px 0; }
+  .diff-hdr { background: #e5e7eb; padding: 6px 14px; font-size: 11px; color: #57606a; font-weight: 700; }
+  .diff pre { border: none; border-radius: 0; margin: 0; }
+  .del { color: #cf222e; background: #ffecec; display: block; }
+  .add { color: #1a7f37; background: #e6ffec; display: block; }
+  .ctx { color: #57606a; display: block; }
+
+  .tag { display: inline-block; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 700; }
+  .tag-red   { background: #fecaca; color: #991b1b; }
+  .tag-blue  { background: #bfdbfe; color: #1e40af; }
+  .tag-green { background: #bbf7d0; color: #166534; }
+  .tag-gray  { background: #e5e7eb; color: #57606a; }
+
+  footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 12px; color: #57606a; }
+</style>
+</head>
+<body>
+
+<h1>OpenTelemetry Tracing</h1>
+<p class="subtitle">Giải thích Trace, Span, Context Propagation — và bug trong banking-demo</p>
+
+
+<h2>1. Các định nghĩa cốt lõi</h2>
+
+<table>
+  <tr>
+    <th>Khái niệm</th>
+    <th>Định nghĩa</th>
+    <th>Ví dụ trong banking-demo</th>
+  </tr>
+  <tr>
+    <td><strong>Trace</strong></td>
+    <td>Toàn bộ hành trình của 1 request từ đầu đến cuối, qua bao nhiêu service cũng được. Mỗi trace có 1 <code>traceId</code> duy nhất.</td>
+    <td>User POST <code>/api/transfers</code> → đi qua Kong → api-producer → transfer-service: đó là <strong>1 trace</strong></td>
+  </tr>
+  <tr>
+    <td><strong>Span</strong></td>
+    <td>Một đơn vị công việc trong trace. Có <code>spanId</code>, tên, thời gian bắt đầu/kết thúc, attributes, và <code>parentSpanId</code>. Spans lồng nhau tạo thành cây.</td>
+    <td><code>rpc.request</code> (api-producer), <code>nats.handler</code> (transfer-service)</td>
+  </tr>
+  <tr>
+    <td><strong>SpanContext</strong></td>
+    <td>Phần "định danh" của span: <code>traceId</code> + <code>spanId</code> + flags. Cái này được truyền qua mạng để các service khác biết mình thuộc về trace nào.</td>
+    <td><code>traceparent: 00-abc123...-def456...-01</code></td>
+  </tr>
+  <tr>
+    <td><strong>Context Propagation</strong></td>
+    <td>Cơ chế truyền SpanContext từ service này sang service kia qua header (HTTP) hoặc message header (NATS, Kafka).</td>
+    <td>api-producer inject <code>traceparent</code> vào NATS header → transfer-service extract ra</td>
+  </tr>
+  <tr>
+    <td><strong>Tracer</strong></td>
+    <td>Object dùng để <em>tạo span</em>. Mỗi service tạo 1 tracer với tên của mình. Không có tracer gọi <code>Start()</code> → không có span.</td>
+    <td><code>otel.Tracer("transfer-service")</code></td>
+  </tr>
+  <tr>
+    <td><strong>TracerProvider</strong></td>
+    <td>Factory tạo ra Tracer. Cần được cấu hình với Exporter (nơi gửi spans đến). Nếu không cấu hình → spans bị bỏ vào void.</td>
+    <td><code>sdktrace.NewTracerProvider(WithBatcher(otlpExporter))</code></td>
+  </tr>
+  <tr>
+    <td><strong>OTLP Exporter</strong></td>
+    <td>Gửi spans từ process Go đến collector (Instana agent) qua gRPC port 4317. Nếu <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> không set → exporter không tồn tại.</td>
+    <td><code>http://$(NODE_IP):4317</code> trong Helm values</td>
+  </tr>
+  <tr>
+    <td><strong>Parent Span</strong></td>
+    <td>Span cha. Khi tạo span mới từ 1 context đã có span, span mới tự động trở thành <em>con</em> của span đang active trong context đó.</td>
+    <td><code>rpc.request</code> là cha của <code>nats.handler</code></td>
+  </tr>
+  <tr>
+    <td><strong>Remote Parent</strong></td>
+    <td>Span cha ở <em>service khác</em>. Được khôi phục qua <code>Extract()</code> — tạo một "link" xuyên process trong cùng 1 trace.</td>
+    <td>api-producer inject → consumer extract → child span vẫn cùng <code>traceId</code></td>
+  </tr>
+</table>
+
+
+<h2>2. Vòng đời của 1 Span</h2>
+
+<pre><span class="comment">// 1. Lấy tracer (thường làm 1 lần lúc khởi động)</span>
+tracer := otel.Tracer("my-service")
+
+<span class="comment">// 2. Bắt đầu span — trả về context mới có chứa span này</span>
+ctx, span := tracer.Start(ctx, "operation.name",
+    trace.WithSpanKind(trace.SpanKindServer),
+    trace.WithAttributes(
+        attribute.String("http.method", "POST"),
+    ),
+)
+<span class="kw">defer</span> span.End()  <span class="comment">// 3. Kết thúc span khi hàm return</span>
+
+<span class="comment">// 4. Làm việc... đặt thêm attributes nếu cần</span>
+span.SetAttributes(attribute.Int("rpc.status", 200))
+
+<span class="comment">// 5. Đánh dấu lỗi nếu có</span>
+span.SetStatus(codes.Error, err.Error())</pre>
+
+
+<h2>3. Context Propagation — Hoạt động như thế nào?</h2>
+
+<ol class="steps">
+  <li>
+    <div>
+      <strong>Producer tạo span</strong> — <code>tracer.Start(ctx, "rpc.request")</code>. Lúc này <code>ctx</code> chứa spanId của span vừa tạo.
+    </div>
+  </li>
+  <li>
+    <div>
+      <strong>Inject vào header</strong> — <code>otel.GetTextMapPropagator().Inject(ctx, HeaderCarrier(hdr))</code>. Lệnh này <em>ghi</em> SpanContext vào NATS header dưới dạng:<br />
+      <code>traceparent: 00-{traceId}-{spanId}-01</code>
+    </div>
+  </li>
+  <li>
+    <div>
+      <strong>NATS giao message</strong> — header <code>traceparent</code> đi kèm message đến consumer.
+    </div>
+  </li>
+  <li>
+    <div>
+      <strong>Consumer Extract</strong> — <code>ctx = otel.GetTextMapPropagator().Extract(ctx, HeaderCarrier(headers))</code>. Lệnh này <em>đọc</em> header và đặt SpanContext (của producer) vào <code>ctx</code> như một <em>remote parent</em>.
+    </div>
+  </li>
+  <li>
+    <div>
+      <strong>Consumer tạo child span</strong> — <code>ctx, span := tracer.Start(ctx, "nats.handler")</code>. Vì <code>ctx</code> đang có remote parent, span mới tự động trở thành <em>con</em> — cùng <code>traceId</code>, <code>parentSpanId</code> = spanId của producer.
+    </div>
+  </li>
+</ol>
+
+<div class="box box-amber">
+  <strong>⚠ Quan trọng:</strong> <code>Extract()</code> chỉ <em>đọc</em> header vào context. Nó <strong>không tạo span</strong>. Nếu sau Extract không có <code>tracer.Start()</code> thì không có gì được gửi đến Instana cả.
+</div>
+
+
+<h2>4. traceparent Header — Anatomy</h2>
+
+<div class="trace-wrap">
+  <div class="trace-title">Format: <code>traceparent: 00-{traceId}-{parentSpanId}-{flags}</code></div>
+  <pre style="margin:0;border:none;background:transparent;padding:4px 0">traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+             ↑  ←————————— traceId (32 hex) ————————→ ←— spanId (16 hex) —→  ↑
+          version                                                           sampled=true</pre>
+</div>
+
+<ul style="margin:0 0 14px 20px;font-size:13px">
+  <li style="margin-bottom:4px"><code>traceId</code>: ID duy nhất cho toàn bộ trace — <strong>giống nhau</strong> ở mọi service trong cùng 1 request</li>
+  <li style="margin-bottom:4px"><code>spanId</code> (parentSpanId): ID của span cha — consumer dùng cái này để "link" span của mình vào đúng chỗ trong cây</li>
+  <li><code>flags</code>: <code>01</code> = sampled (ghi lại), <code>00</code> = không ghi lại</li>
+</ul>
+
+
+<h2>5. Bug trong banking-demo — Trước và sau khi fix</h2>
+
+<h3>Trước khi fix — Trace bị "cụt"</h3>
+<div class="trace-wrap">
+  <div class="trace-title">Trace view trong Instana (trước fix)</div>
+  <div class="trace-row">
+    <div class="trace-label">Kong</div>
+    <div class="trace-bar-wrap"><div class="trace-bar bar-kong">HTTP ingress</div></div>
+  </div>
+  <div class="trace-row">
+    <div class="trace-label">api-producer</div>
+    <div class="trace-bar-wrap"><div class="trace-bar bar-prod">rpc.request (banking.transfer.transfer)</div></div>
+  </div>
+  <div class="trace-row">
+    <div class="trace-label">transfer-service</div>
+    <div class="trace-bar-wrap"><div class="trace-bar bar-missing">❌ Không có span</div></div>
+  </div>
+</div>
+
+<div class="box box-red">
+  <strong>Tại sao?</strong> Consumer gọi <code>Extract()</code> để lấy remote parent context, nhưng <strong>không bao giờ gọi <code>tracer.Start()</code></strong>. Không có span nào được tạo → không có gì để gửi đến OTLP exporter → Instana không thấy gì ở phía consumer.
+</div>
+
+<div class="diff">
+  <div class="diff-hdr">internal/nats/consumer.go — dispatch()</div>
+  <pre><span class="ctx">  // Extract remote parent từ NATS headers</span>
+<span class="ctx">  ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(req.Headers()))</span>
+<span class="ctx"> </span>
+<span class="del">- // Không có tracer.Start() → không có span → Instana không thấy gì</span>
+<span class="add">+ // Tạo child span — ctx đã có remote parent nên span này tự link vào trace của producer</span>
+<span class="add">+ ctx, span := c.tracer.Start(ctx, "nats.handler",</span>
+<span class="add">+     trace.WithSpanKind(trace.SpanKindConsumer),</span>
+<span class="add">+     trace.WithAttributes(</span>
+<span class="add">+         attribute.String("messaging.system", "nats"),</span>
+<span class="add">+         attribute.String("messaging.destination.name", subject),</span>
+<span class="add">+         attribute.String("messaging.operation", "process"),</span>
+<span class="add">+     ),</span>
+<span class="add">+ )</span>
+<span class="add">+ defer span.End()</span></pre>
+</div>
+
+<h3>Sau khi fix — Trace đầy đủ</h3>
+<div class="trace-wrap">
+  <div class="trace-title">Trace view trong Instana (sau fix) — cùng 1 traceId</div>
+  <div class="trace-row">
+    <div class="trace-label">Kong</div>
+    <div class="trace-bar-wrap"><div class="trace-bar bar-kong">HTTP ingress</div></div>
+  </div>
+  <div class="trace-row">
+    <div class="trace-label">api-producer</div>
+    <div class="trace-bar-wrap"><div class="trace-bar bar-prod">rpc.request (banking.transfer.transfer)</div></div>
+  </div>
+  <div class="trace-row">
+    <div class="trace-label">transfer-service</div>
+    <div class="trace-bar-wrap"><div class="trace-bar bar-svc">nats.handler ← child của rpc.request</div></div>
+  </div>
+</div>
+
+
+<h2>6. Tại sao fix này áp dụng cho tất cả service?</h2>
+
+<div class="box box-green">
+  <code>Consumer</code> là <strong>struct dùng chung</strong> trong <code>internal/nats/consumer.go</code>. Tất cả 4 service đều gọi <code>internnats.NewConsumer(...)</code> — không service nào có dispatcher riêng. Sửa 1 chỗ → áp dụng ngay cho cả 4:
+</div>
+
+<table>
+  <tr>
+    <th>Service</th>
+    <th>Subject prefix</th>
+    <th>Tracer name (<code>otel.Tracer(name)</code>)</th>
+    <th>Span sẽ thấy</th>
+  </tr>
+  <tr>
+    <td>auth-service</td>
+    <td><code>banking.auth</code></td>
+    <td><code>"auth-service"</code></td>
+    <td><span class="tag tag-blue">nats.handler</span></td>
+  </tr>
+  <tr>
+    <td>account-service</td>
+    <td><code>banking.account</code></td>
+    <td><code>"account-service"</code></td>
+    <td><span class="tag tag-blue">nats.handler</span></td>
+  </tr>
+  <tr>
+    <td>transfer-service</td>
+    <td><code>banking.transfer</code></td>
+    <td><code>"transfer-service"</code></td>
+    <td><span class="tag tag-blue">nats.handler</span></td>
+  </tr>
+  <tr>
+    <td>notification-service</td>
+    <td><code>banking.notification</code></td>
+    <td><code>"notification-service"</code></td>
+    <td><span class="tag tag-blue">nats.handler</span></td>
+  </tr>
+</table>
+
+
+<h2>7. Tóm tắt quy trình đầy đủ</h2>
+
+<pre><span class="comment">// ─── api-producer/rpc.go ───────────────────────────────────────────</span>
+ctx, span := tracer.Start(ctx, "rpc.request")   <span class="comment">// Tạo span cha</span>
+<span class="kw">defer</span> span.End()
+otel.GetTextMapPropagator().Inject(ctx, HeaderCarrier(hdr))
+<span class="comment">// → NATS header: traceparent: 00-{traceId}-{rpc.request spanId}-01</span>
+c.nc.RequestMsgWithContext(ctx, &amp;nats.Msg{Header: hdr, ...})
+
+<span class="comment">// ─── internal/nats/consumer.go ─────────────────────────────────────</span>
+ctx = otel.GetTextMapPropagator().Extract(ctx, HeaderCarrier(req.Headers()))
+<span class="comment">// ctx bây giờ biết: remote parent = rpc.request spanId</span>
+
+ctx, span := c.tracer.Start(ctx, "nats.handler")   <span class="comment">// Tạo span con ✅</span>
+<span class="comment">// → parentSpanId = rpc.request spanId → cùng traceId → thấy trong Instana</span>
+<span class="kw">defer</span> span.End()
+h(ctx, action, payload, headers)   <span class="comment">// Handler chạy bên trong span này</span></pre>
+
+<footer>Made with IBM Bob</footer>
+</body>
+</html>

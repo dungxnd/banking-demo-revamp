@@ -1,0 +1,65 @@
+name: Instana GitOps — reload agent config
+
+# Trigger a hot-reload of the Instana agent configuration whenever
+# instana/configuration.yaml changes on the golang branch.
+#
+# The Instana Web API accepts a reload request scoped to a zone query,
+# which tells all matching agents to git-pull and apply the latest config.
+# No helm upgrade or pod restart is needed — the agent reloads in ~30 s.
+#
+# Required GitHub secret:
+#   INSTANA_API_TOKEN  — Instana API token with "Agent Configuration" permission
+#                        (Settings → API Tokens → Agent Configuration: read+write)
+#   INSTANA_ENDPOINT_HOST — e.g. ingress-red-saas.instana.io
+#
+# The zone query 'entity.zone:"banking-dung-ec2"' matches the single EC2 agent.
+
+on:
+  push:
+    branches:
+      - golang
+    paths:
+      - "instana/configuration.yaml"
+
+jobs:
+  reload-instana-config:
+    name: Trigger Instana agent config reload
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Instana agent configuration update
+        env:
+          INSTANA_API_TOKEN: ${{ secrets.INSTANA_API_TOKEN }}
+          INSTANA_ENDPOINT_HOST: ${{ secrets.INSTANA_ENDPOINT_HOST }}
+        run: |
+          echo "Triggering Instana config reload for zone: banking-dung-ec2"
+
+          HTTP_STATUS=$(curl --silent --output /tmp/instana-response.json \
+            --write-out "%{http_code}" \
+            --request POST \
+            --url "https://${INSTANA_ENDPOINT_HOST}/api/host-agent/update?query=entity.zone%3A%22banking-dung-ec2%22" \
+            --header "authorization: apiToken ${INSTANA_API_TOKEN}" \
+            --header "content-type: application/json")
+
+          echo "Response HTTP status: ${HTTP_STATUS}"
+          cat /tmp/instana-response.json || true
+
+          if [ "${HTTP_STATUS}" -lt 200 ] || [ "${HTTP_STATUS}" -ge 300 ]; then
+            echo "ERROR: Instana API returned HTTP ${HTTP_STATUS}"
+            exit 1
+          fi
+
+          echo "Reload triggered. The agent will git-pull and apply instana/configuration.yaml within ~30 s."
+
+      - name: Summary
+        run: |
+          echo "### Instana config reload triggered :white_check_mark:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | \`golang\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| File changed | \`instana/configuration.yaml\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Zone targeted | \`banking-dung-ec2\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Expected propagation | ~30 s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verify in Instana: **Infrastructure → EC2 node → PostgreSQL / Redis**" >> "$GITHUB_STEP_SUMMARY"

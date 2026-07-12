@@ -1,0 +1,250 @@
+# Instana Agent configuration — banking-demo golang branch (Go/NATS on k3s)
+#
+# Delivery: Git-based configuration management.
+# The Instana DaemonSet agent pulls this file from the repo on every startup
+# and on every hot-reload triggered via the Instana Web API (GitOps workflow).
+#
+# How it works:
+#   1. The Helm chart sets INSTANA_GIT_REMOTE_REPOSITORY / _BRANCH / _USERNAME
+#      as container env vars (see instana/helm-agent-values.yaml).
+#   2. On first start the agent clones the repo into instanaAgentDir/etc/.git
+#      and checks out the configured branch.
+#   3. On subsequent starts (and hot-reloads) it pulls the branch.
+#   4. The agent maps repository paths to its config directory:
+#        instana/configuration.yaml  →  instanaAgentDir/etc/instana/configuration.yaml
+#      (The "instana/" prefix in the repo matches the agent's config subdirectory.)
+#
+# To apply a config change WITHOUT a helm upgrade:
+#   git push → GitHub Actions triggers Web API hot-reload for zone banking-dung-ec2
+#   (.github/workflows/instana-gitops.yml)
+#
+# NOTE: Do NOT use agent.configuration_yaml: in helm-agent-values.yaml —
+# that is the inline-embed alternative and overrides Git-based config.
+#
+# Hot-reloaded: most settings take effect without agent restart.
+# Merge order: configuration-*.yaml files merged alphabetically.
+
+# ---------------------------------------------------------------------------
+# Zone — appears in Instana UI filter drop-downs and AP builder.
+# For the Helm agent, zone is also set via Helm values (zone.name).
+# Both are kept for completeness; Helm values take precedence.
+# ---------------------------------------------------------------------------
+com.instana.zone:
+  name: banking-dung-ec2
+
+# ---------------------------------------------------------------------------
+# Host tags — additional filter dimensions in the AP builder.
+# ---------------------------------------------------------------------------
+com.instana.tags:
+  - environment: production
+  - team: banking
+  - project: banking-demo
+
+# ---------------------------------------------------------------------------
+# Kubernetes — DaemonSet agent self-identification as a K8s agent.
+#
+# For the Helm DaemonSet agent (k8s_sensor.deployment.enabled: true):
+#   - This block tells the DaemonSet pods they are running on Kubernetes.
+#   - Do NOT set kubeconfig here; the DaemonSet pod uses in-cluster RBAC
+#     automatically (ServiceAccount token mounted at /var/run/secrets/...).
+#   - The k8sensor Deployment handles K8s object discovery (pods, nodes,
+#     deployments). This block is NOT for that — it is for the agent's own
+#     context awareness.
+#
+# For the legacy EC2 host-agent (systemd, outside the cluster):
+#   - Uncomment kubeconfig and point it to the kubeconfig file on disk:
+#     kubeconfig: /etc/rancher/k3s/k3s.yaml
+# ---------------------------------------------------------------------------
+com.instana.plugin.kubernetes:
+  enabled: true
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Traefik sensor — DISABLED.
+# k3s is installed with --disable traefik (see roles/k3s/tasks/main.yml).
+# Traefik is not running in this cluster. Kong handles all ingress via hostPort.
+# ---------------------------------------------------------------------------
+# com.instana.plugin.traefik:
+#   enabled: true
+#   poll_rate: 1
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry — accept OTLP from Go pods (gRPC :4317, HTTP :4318).
+#
+# Two valid export targets in K8s — use whichever the app SDK is configured for:
+#
+#   ① K8s Service (cluster-wide, preferred for K8s):
+#        http://instana-agent.instana-agent.svc.cluster.local:4317  (gRPC)
+#        http://instana-agent.instana-agent.svc.cluster.local:4318  (HTTP)
+#      The Helm chart creates this Service automatically (service.create=true).
+#      Works from any namespace. Use this in OTEL_EXPORTER_OTLP_ENDPOINT.
+#
+#   ② NODE_IP host interface (same-node DaemonSet pattern):
+#        http://$(NODE_IP):4317  via status.hostIP downward API
+#      Stays local to the node — zero cross-node traffic.
+#      Used by banking-demo Go services via internal/tracing.Init().
+#
+# Both are enabled below so either pattern works simultaneously.
+# ---------------------------------------------------------------------------
+com.instana.plugin.opentelemetry:
+  grpc:
+    enabled: true
+    port: 4317
+  http:
+    enabled: true
+    port: 4318
+
+# ---------------------------------------------------------------------------
+# Prometheus scraping — auto-discover annotated pods and services.
+#
+# prometheusAnnotations: strict  tells the agent to honour pod/service
+# annotations and scrape every resource that has:
+#   prometheus.io/scrape: "true"
+#   prometheus.io/path:   "/metrics"   (optional, defaults to /metrics)
+#   prometheus.io/port:   "<port>"     (optional, uses containerPort if absent)
+#
+# The following banking-demo resources are already annotated in the Helm chart:
+#   auth-service      :8001/metrics   (rpc_*, nats_*, process_*)
+#   account-service   :8002/metrics
+#   transfer-service  :8003/metrics
+#   notification-service :8004/metrics
+#   api-producer      :8080/metrics   (http_*, rpc_*, process_*)
+#   nats-exporter     :7777/metrics   (gnatsd_varz_*, gnatsd_jsz_*)
+#
+# Instana surfaces these as "Prometheus Apps" under Infrastructure → Host.
+# Query with: entity.type:prometheus in Dynamic Focus / Alerts.
+# ---------------------------------------------------------------------------
+com.instana.plugin.prometheus:
+  prometheusAnnotations: strict
+
+# ---------------------------------------------------------------------------
+# Nginx — in-cluster pod auto-discovery.
+#
+# The DaemonSet agent on each node automatically discovers nginx containers
+# via the /proc filesystem and Docker/containerd socket. No explicit host/port
+# needed. The service_name below controls how it appears in the Instana UI.
+#
+# For the legacy EC2 host-agent (systemd) you would also add:
+#   host: localhost
+#   port: 80
+#   status_path: /nginx_status
+# ---------------------------------------------------------------------------
+com.instana.plugin.nginx:
+  service_name: frontend
+
+# ---------------------------------------------------------------------------
+# PostgreSQL monitoring
+#
+# The Helm DaemonSet agent runs as a pod inside the cluster and CAN reach
+# postgres.banking.svc.cluster.local:5432 directly via cluster DNS.
+#
+# Requires track_counts, track_activities, track_io_timing = on in postgresql.conf.
+# These are set via the postgres-init-configmap (helm/templates/).
+# ---------------------------------------------------------------------------
+com.instana.plugin.postgresql:
+  user: banking
+  password: bankingpass
+  database: banking
+  host: postgres.banking.svc.cluster.local
+  port: 5432
+
+# ---------------------------------------------------------------------------
+# Redis monitoring
+#
+# The DaemonSet agent auto-discovers the Redis pod via containerd process
+# detection and activates a sensor for its pod IP directly (visible in the
+# agent log as "Activated Sensor for <pod-ip>:6379"). This produces a single
+# Redis entity named after the process.
+#
+# Adding an explicit hosts block here creates a SECOND sensor entry keyed by
+# the hostname/FQDN, which Instana cannot merge with the auto-discovered pod-IP
+# entity — resulting in two Redis nodes on the dependency graph.
+#
+# Solution: remove the explicit hosts block and rely on auto-discovery alone.
+#
+# If the auto-discovered entity needs configuration overrides (poll_rate,
+# credentials, SSL), uncomment the block below and set use_ssl: false to
+# suppress the "SSL is disabled... Read timed out" warning.
+# ---------------------------------------------------------------------------
+com.instana.plugin.redis:
+  use_ssl: false
+  # hosts: []   ← intentionally omitted; auto-discovery handles Redis
+
+# ---------------------------------------------------------------------------
+# Kong API Gateway monitoring
+#
+# Kong admin API is bound to 127.0.0.1:8001 inside the container (loopback).
+# The Instana agent pod cannot reach it via ClusterIP or DNS because Kong's
+# Kubernetes Service only exposes the proxy port (8000), not the admin port.
+# Leave commented out until a dedicated admin Service/NodePort is added.
+#
+# com.instana.plugin.kong:
+#   enabled: true
+#   dataset_size: 10
+#   status_code_group: '2xx,3xx,4xx,5xx'
+#   remote:
+#     - host: '127.0.0.1'
+#       port: '32001'            # NodePort for admin — add to helm/templates/kong.yaml first
+#       availabilityZone: 'banking-dung-ec2'
+#       poll_rate: 30
+#       protocol: 'http'
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# NATS monitoring
+# NATS metrics are scraped via the prometheus-nats-exporter sidecar (:7777/metrics)
+# using prometheusAnnotations above. The nats-exporter Service has:
+#   prometheus.io/scrape: "true"  prometheus.io/port: "7777"
+# No additional sensor block needed.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Automation Action — Ansible (disabled by default)
+# Enable when an Ansible Automation Controller (AWX / AAP) is available.
+# See instana/docs/12-ansible-automation-action.md for setup guide.
+# ---------------------------------------------------------------------------
+# com.instana.plugin.action.ansible:
+#   enabled: true
+#   url: https://your-awx-or-aap.example.com
+#   apiPath: /api/controller/v2   # AAP 2.5+; default is /api/v2
+#   token:
+#     configuration_from:
+#       type: vault
+#       secret_key:
+#         path: secret/banking-demo/ansible
+#         key: controller_token
+#   maxConcurrentActions: 5
+#   defaultTimeout: 120
+
+# ---------------------------------------------------------------------------
+# Tracing — propagate W3C and Instana trace headers across service hops.
+# traceparent/tracestate: W3C Trace Context (OTel standard)
+# x-instana-*: Instana native headers (for mixed OTel + Instana tracing)
+# ---------------------------------------------------------------------------
+com.instana.tracing:
+  extra-http-headers:
+    - traceparent
+    - tracestate
+    - x-instana-t
+    - x-instana-s
+    - x-instana-l
+
+# ---------------------------------------------------------------------------
+# Secrets — redact sensitive values from collected config/env data.
+# ---------------------------------------------------------------------------
+com.instana.secrets:
+  matcher: contains-ignore-case
+  list:
+    - secret
+    - token
+    - DATABASE_URL
+    - REDIS_URL
+    - NATS_URL
+    # "password" intentionally removed: the agent applies this filter to its
+    # own sensor config before connecting, so having "password" here caused
+    # the PostgreSQL sensor's password field to be redacted to "" — producing
+    # SCRAM auth failure (error 08004).
+    # "key" intentionally removed: too broad — it redacted internal agent
+    # fields (INSTANA_AGENT_KEY etc.). Sensitive values are covered by the
+    # explicit DATABASE_URL / REDIS_URL / NATS_URL entries above.
+
