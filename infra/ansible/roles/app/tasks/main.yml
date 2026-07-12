@@ -1,0 +1,151 @@
+---
+# ── Ensure kubeconfig is usable before any helm/kubectl call ─────────────────
+# k3s regenerates /etc/rancher/k3s/k3s.yaml on upgrades/reboots, sometimes
+# writing the public EC2 IP as the server address. That IP is NOT in k3s's TLS
+# SAN list → x509 errors. Always patch ~/.kube/config to 127.0.0.1 first.
+- name: Ensure kubeconfig server points to 127.0.0.1
+  ansible.builtin.replace:
+    path: /home/ubuntu/.kube/config
+    regexp: 'server: https://[^:]+:6443'
+    replace: 'server: https://127.0.0.1:6443'
+  become: true
+  tags: app
+
+- name: Create app directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0755"
+  tags: app
+
+- name: Clone / update repository
+  ansible.builtin.git:
+    repo: "{{ app_repo }}"
+    dest: "{{ app_dir }}"
+    version: "{{ app_repo_version }}"
+    force: true   # discard any local changes so git pull always succeeds
+    update: true
+  become: false
+  tags: app
+
+# â”€â”€ Instana agent Helm repo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# The Instana agent is installed as a separate Helm release in the
+# instana-agent namespace â€” it is NOT part of the banking-demo chart.
+# We add the repo here so the deploy task (and future upgrades) can use
+# --repo https://agents.instana.io/helm without a manual pre-step.
+# `helm repo add` is idempotent: re-running with the same name/URL is a no-op.
+- name: Add Instana Helm repo
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo add instana https://agents.instana.io/helm
+  become: false
+  environment:
+    # /home/ubuntu/.kube/config is patched to 127.0.0.1 by the k3s role.
+    # /etc/rancher/k3s/k3s.yaml may contain the public EC2 IP which is NOT in
+    # the k3s TLS SAN list â€” using it causes x509 certificate errors.
+    KUBECONFIG: /home/ubuntu/.kube/config
+    PATH: /usr/local/bin:/usr/bin:/bin
+  register: instana_repo_add
+  changed_when: "'already exists' not in instana_repo_add.stderr"
+  tags: app
+
+- name: Update Instana Helm repo
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo update instana
+  become: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+    PATH: /usr/local/bin:/usr/bin:/bin
+  changed_when: true   # repo update always fetches latest index
+  tags: app
+
+- name: Deploy / upgrade Helm release
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/helm upgrade --install {{ helm_release_name }}
+      {{ helm_chart_dir }}
+      --namespace {{ helm_namespace }}
+      --create-namespace
+      --wait
+      --timeout 5m
+      -f {{ helm_chart_dir }}/values.yaml
+      {{ helm_extra_args }}
+  become: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+    PATH: /usr/local/bin:/usr/bin:/bin
+  register: helm_result
+  changed_when: "'has been upgraded' in helm_result.stdout or 'has been deployed' in helm_result.stdout"
+  tags: app
+
+# ── Force-pull fresh :latest images for all Go services ──────────────────────
+# Helm sees no manifest diff when only the image content changes (same :latest
+# tag → same pod-spec hash) so it skips a rollout. kubectl rollout restart
+# patches a pod-template annotation (kubectl.kubernetes.io/restartedAt) which
+# forces a new ReplicaSet, triggering a fresh image pull on every Go service.
+# Infrastructure images (postgres, redis, nats, kong) use pinned tags and are
+# intentionally excluded — they only restart when their values.yaml tag changes.
+- name: Rollout restart Go services to pull fresh :latest images
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/kubectl rollout restart deployment
+      auth-service
+      account-service
+      transfer-service
+      notification-service
+      api-producer
+      frontend
+      -n {{ helm_namespace }}
+  become: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+    PATH: /usr/local/bin:/usr/bin:/bin
+  changed_when: true
+  tags: app
+
+- name: Wait for Go services to finish rolling out
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/kubectl rollout status deployment/{{ item }}
+      -n {{ helm_namespace }}
+      --timeout=3m
+  loop:
+    - auth-service
+    - account-service
+    - transfer-service
+    - notification-service
+    - api-producer
+    - frontend
+  become: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+    PATH: /usr/local/bin:/usr/bin:/bin
+  changed_when: false
+  tags: app
+
+- name: Wait for Kong to become healthy
+  ansible.builtin.uri:
+    url: "{{ app_healthcheck_url }}"
+    method: GET
+    status_code: [200, 404]   # Kong returns 404 on / â€” that means it's up
+    timeout: 5
+  register: healthcheck
+  until: healthcheck.status in [200, 404]
+  retries: "{{ app_healthcheck_retries }}"
+  delay: "{{ app_healthcheck_delay }}"
+  tags: app
+
+- name: Show pod status
+  ansible.builtin.command:
+    cmd: /usr/local/bin/k3s kubectl get pods -n {{ helm_namespace }}
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: pods_output
+  changed_when: false
+  tags: app
+
+- name: Print pod status
+  ansible.builtin.debug:
+    msg: "{{ pods_output.stdout_lines }}"
+  tags: app

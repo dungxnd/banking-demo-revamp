@@ -1,0 +1,4 @@
+﻿---
+# Fallback defaults for the app role.
+# app_repo, app_repo_version, app_dir, and all helm/healthcheck settings
+# are declared in group_vars/all.yml â€” edit there, not here.

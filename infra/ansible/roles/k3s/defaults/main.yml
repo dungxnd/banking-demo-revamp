@@ -1,0 +1,7 @@
+---
+# k3s role defaults
+k3s_version: latest
+k3s_config_dir: /etc/rancher/k3s
+
+# Helm binary version
+helm_version: "v4.2.2"

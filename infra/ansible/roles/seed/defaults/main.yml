@@ -1,0 +1,16 @@
+---
+# Seed users created via the /api/auth/register endpoint.
+# Passwords are plain-text here — the auth-service bcrypt-hashes them on insert.
+# Add or remove users freely; the task is idempotent (409 on duplicate phone is ignored).
+seed_api_base_url: "http://localhost:80"
+
+seed_users:
+  - username: alice
+    phone: "0100000001"
+    password: "password123"
+  - username: bob
+    phone: "0100000002"
+    password: "password123"
+  - username: charlie
+    phone: "0100000003"
+    password: "password123"

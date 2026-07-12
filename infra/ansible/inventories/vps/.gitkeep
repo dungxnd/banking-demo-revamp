@@ -1,0 +1,6 @@
+# This directory is populated by `terraform apply`.
+# Terraform renders:
+#   hosts.ini          ← Ansible inventory (host IP + SSH key path)
+#   group_vars/all.yml ← shared variables (server_public_ip, app_dir, etc.)
+#
+# Both files are listed in .gitignore — never commit them.

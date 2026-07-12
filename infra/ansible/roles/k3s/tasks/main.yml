@@ -1,0 +1,76 @@
+﻿---
+- name: Install k3s (single-node server)
+  ansible.builtin.shell:
+    # Omit INSTALL_K3S_VERSION when set to "latest" — the installer keyword for
+    # "give me latest" is an unset variable, not the string "latest".
+    # INSTALL_K3S_MIRROR: use Rancher CN mirror for GitHub asset downloads —
+    # required for ap-southeast-1 and other regions where GitHub releases are unreliable.
+    cmd: >
+      curl -sfL https://get.k3s.io |
+      {% if k3s_version != 'latest' %}INSTALL_K3S_VERSION="{{ k3s_version }}"{% endif %}
+      INSTALL_K3S_MIRROR="cn"
+      INSTALL_K3S_EXEC="server --disable traefik --write-kubeconfig-mode 644"
+      sh -
+    creates: /usr/local/bin/k3s
+  tags: k3s
+
+- name: Ensure k3s service is started
+  ansible.builtin.systemd:
+    name: k3s
+    state: started
+    enabled: true
+  tags: k3s
+
+- name: Wait for k3s to be ready
+  ansible.builtin.command: /usr/local/bin/k3s kubectl get nodes
+  register: k3s_nodes
+  until: k3s_nodes.rc == 0 and 'Ready' in k3s_nodes.stdout
+  retries: 30
+  delay: 10
+  changed_when: false
+  failed_when: false
+  tags: k3s
+
+- name: Create .kube directory for ubuntu user
+  ansible.builtin.file:
+    path: /home/ubuntu/.kube
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0700"
+  tags: k3s
+
+- name: Copy kubeconfig for ubuntu user
+  ansible.builtin.copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /home/ubuntu/.kube/config
+    owner: ubuntu
+    group: ubuntu
+    mode: "0600"
+    remote_src: true
+  tags: k3s
+
+# Do NOT replace 127.0.0.1 â€” k3s TLS cert covers only internal IPs.
+# Helm/kubectl running ON the node must use localhost to avoid x509 errors.
+- name: Ensure kubeconfig points to localhost
+  ansible.builtin.replace:
+    path: /home/ubuntu/.kube/config
+    regexp: 'server: https://.*:6443'
+    replace: 'server: https://127.0.0.1:6443'
+  tags: k3s
+
+- name: Download Helm installer
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4
+    dest: /tmp/get-helm.sh
+    mode: "0700"
+    force: false
+  tags: k3s
+
+- name: Install Helm
+  ansible.builtin.command:
+    cmd: /tmp/get-helm.sh
+    creates: /usr/local/bin/helm
+  environment:
+    DESIRED_VERSION: "{{ helm_version }}"
+  tags: k3s

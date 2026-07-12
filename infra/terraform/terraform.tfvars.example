@@ -1,0 +1,22 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# DO NOT commit terraform.tfvars — it is listed in .gitignore.
+
+aws_region       = "ap-southeast-1"
+environment      = "dev"
+instance_type    = "t3a.medium"
+
+# key_name must match an existing key pair name in your AWS account
+# (EC2 → Key Pairs in the console). Terraform looks it up; it does not create it.
+# private_key_path is written into the Ansible inventory — Terraform never reads it.
+key_name         = "KeyName"
+private_key_path = "~/.ssh/KeyName.pem"
+
+# Restrict these to your IP for production deployments.
+# e.g. allowed_ssh_cidrs = ["203.0.113.10/32"]
+allowed_ssh_cidrs = ["0.0.0.0/0"]
+allowed_app_cidrs = ["0.0.0.0/0"]
+
+root_volume_size_gb = 30
+
+ansible_inventory_path  = "../ansible/inventories/vps/hosts.ini"
+ansible_group_vars_path = "../ansible/inventories/vps/group_vars/all.yml"

@@ -1,0 +1,17 @@
+---
+# Main entry point — provisions the banking-demo VPS from scratch.
+# Run: ansible-playbook site.yml
+# Tags: common | k3s | app | seed
+#       ansible-playbook site.yml --tags app          # re-deploy / upgrade only
+#       ansible-playbook site.yml --tags seed         # seed users only (idempotent)
+#       ansible-playbook site.yml --tags app,seed     # deploy + seed in one shot
+
+- name: Bootstrap banking-demo server
+  hosts: banking_demo
+  become: true
+
+  roles:
+    - common
+    - k3s
+    - app
+    - seed

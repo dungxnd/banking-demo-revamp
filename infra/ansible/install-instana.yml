@@ -1,0 +1,195 @@
+---
+# Install (or upgrade) the Instana agent as a DaemonSet inside k3s.
+#
+# This playbook is intentionally separate from site.yml because:
+#   - It requires secrets (agent.key, downloadKey, endpointHost) that must NOT
+#     be stored in group_vars or committed to git.
+#   - The Instana agent is installed once and upgraded deliberately — it should
+#     NOT run on every app deploy.
+#
+# Usage (from infra/ansible/ or via deploy.sh wrapper):
+#
+#   ansible-playbook install-instana.yml \
+#     -e agent_key=<YOUR_AGENT_KEY> \
+#     -e agent_download_key=<YOUR_DOWNLOAD_KEY> \
+#     -e endpoint_host=<host>
+#
+# Optional overrides (shown with defaults):
+#   -e endpoint_port=443
+#   -e cluster_name=banking-demo-k3s
+#   -e zone_name=banking-dung-ec2
+#   -e instana_namespace=instana-agent
+#   -e reinstall=false          # set true to force helm uninstall + reinstall
+#
+# Via deploy.sh (handles SSH key + ansible.cfg automatically):
+#
+#   ./deploy.sh -p install-instana.yml \
+#     -e agent_key=<KEY> \
+#     -e agent_download_key=<DL_KEY> \
+#     -e endpoint_host=<host>
+#
+# See instana/docs/13-k8s-agent-install.md for full Helm values reference.
+
+- name: Install Instana agent into k3s
+  hosts: banking_demo
+  become: false
+
+  vars:
+    # ── Required — must be passed via -e (no defaults intentionally) ──────────
+    # agent_key:          # Instana agent key (Settings → Agents in Instana UI)
+    # agent_download_key: # Download key (same as agent_key for SaaS)
+    # endpoint_host:      # e.g. ingress-red-saas.instana.io
+    # git_token:          # GitHub PAT with repo:read scope — used by agent to pull
+    #                     # instana/configuration.yaml from the golang branch on startup.
+
+    # ── Optional — override per environment ───────────────────────────────────
+    endpoint_port:     443
+    cluster_name:      banking-demo-k3s
+    zone_name:         banking-dung-ec2
+    instana_namespace: instana-agent
+    reinstall:         false
+
+  pre_tasks:
+    - name: Assert required variables are provided
+      ansible.builtin.assert:
+        that:
+          - agent_key is defined and agent_key | length > 0
+          - agent_download_key is defined and agent_download_key | length > 0
+          - endpoint_host is defined and endpoint_host | length > 0
+          - git_token is defined and git_token | length > 0
+        fail_msg: |
+          Required variables missing. Run with:
+            -e agent_key=<KEY>
+            -e agent_download_key=<DL_KEY>
+            -e endpoint_host=<BACKEND_HOST>
+            -e git_token=<GITHUB_PAT>
+
+  # Use the ubuntu user's kubeconfig (/home/ubuntu/.kube/config) for every task.
+  # The k3s role patches it to server: https://127.0.0.1:6443 — the only address
+  # covered by k3s's TLS cert on EC2. /etc/rancher/k3s/k3s.yaml is written by k3s
+  # with whatever IP it detects (often the public EC2 IP) which is NOT in the TLS
+  # SAN list, causing: x509: certificate is valid for 10.x.x.x, not 54.x.x.x.
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+    PATH: /usr/local/bin:/usr/bin:/bin
+
+  tasks:
+    # ── Ensure kubeconfig is usable before any helm call ───────────────────────
+    # k3s regenerates /etc/rancher/k3s/k3s.yaml on upgrades/reboots, sometimes
+    # writing the public EC2 IP. Always patch ~/.kube/config to 127.0.0.1 first.
+    - name: Ensure kubeconfig server points to 127.0.0.1
+      ansible.builtin.replace:
+        path: /home/ubuntu/.kube/config
+        regexp: 'server: https://[^:]+:6443'
+        replace: 'server: https://127.0.0.1:6443'
+      become: true
+      tags: instana
+
+    # ── Optional: clean slate before reinstall ─────────────────────────────────
+    - name: Uninstall existing Instana agent (only when reinstall=true)
+      ansible.builtin.command:
+        cmd: /usr/local/bin/helm uninstall instana-agent -n {{ instana_namespace }}
+      register: helm_uninstall
+      failed_when:
+        - helm_uninstall.rc != 0
+        - "'not found' not in helm_uninstall.stderr"
+      changed_when: helm_uninstall.rc == 0
+      when: reinstall | bool
+      tags: instana
+
+    # ── Ensure Instana repo is registered (idempotent) ─────────────────────────
+    - name: Add Instana Helm repo
+      ansible.builtin.command:
+        cmd: /usr/local/bin/helm repo add instana https://agents.instana.io/helm
+      register: repo_add
+      changed_when: "'already exists' not in repo_add.stderr"
+      tags: instana
+
+    - name: Update Instana Helm repo
+      ansible.builtin.command:
+        cmd: /usr/local/bin/helm repo update instana
+      changed_when: true
+      tags: instana
+
+    # ── Install / upgrade the agent ────────────────────────────────────────────
+    # Uses `helm upgrade --install` so the task is idempotent:
+    #   - First run: installs the agent DaemonSet + k8sensor Deployment.
+    #   - Subsequent runs: upgrades if chart or values changed, no-op otherwise.
+    #
+    # -f helm-agent-values.yaml sets cluster/zone/k8s_sensor knobs and the static
+    # Git env vars (INSTANA_GIT_REMOTE_REPOSITORY, INSTANA_GIT_REMOTE_BRANCH).
+    # The GitHub PAT is passed separately via --set so it is never stored in the
+    # values file or in git.
+    #
+    # No --set-file needed: the agent fetches instana/configuration.yaml from
+    # the golang branch of this repo on every startup via Git-based config mgmt.
+    - name: Install / upgrade Instana agent
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/helm upgrade --install instana-agent
+          instana/instana-agent
+          --namespace {{ instana_namespace }}
+          --create-namespace
+          --wait
+          --timeout 5m
+          -f {{ playbook_dir }}/../../instana/helm-agent-values.yaml
+          --set agent.key={{ agent_key }}
+          --set agent.downloadKey={{ agent_download_key }}
+          --set agent.endpointHost={{ endpoint_host }}
+          --set agent.endpointPort={{ endpoint_port }}
+          --set cluster.name={{ cluster_name }}
+          --set zone.name={{ zone_name }}
+          --set k8s_sensor.deployment.enabled=true
+          --set agent.env.INSTANA_GIT_REMOTE_USERNAME={{ git_token }}
+      register: helm_result
+      changed_when: >
+        'has been upgraded' in helm_result.stdout or
+        'has been deployed' in helm_result.stdout
+      tags: instana
+
+    # ── Verify ─────────────────────────────────────────────────────────────────
+    - name: Show Instana agent pod status
+      ansible.builtin.command:
+        cmd: /usr/local/bin/k3s kubectl get pods -n {{ instana_namespace }}
+      register: pods_output
+      changed_when: false
+      tags: instana
+
+    - name: Print Instana agent pod status
+      ansible.builtin.debug:
+        msg: "{{ pods_output.stdout_lines }}"
+      tags: instana
+
+    - name: Wait for instana-agent DaemonSet to be ready
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/kubectl rollout status daemonset/instana-agent
+          -n {{ instana_namespace }}
+          --timeout=120s
+      changed_when: false
+      tags: instana
+
+    - name: Wait for k8sensor Deployment to be ready
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/kubectl rollout status deployment/k8sensor
+          -n {{ instana_namespace }}
+          --timeout=120s
+      changed_when: false
+      failed_when: false   # k8sensor name may vary across chart versions
+      tags: instana
+
+    - name: Print next steps
+      ansible.builtin.debug:
+        msg:
+          - "Instana agent installed. Allow 30-60 s for the cluster to appear in Instana UI."
+          - "  Infrastructure → Kubernetes → {{ cluster_name }}"
+          - ""
+          - "To verify OTLP port is listening on the agent pod:"
+          - "  kubectl -n {{ instana_namespace }} exec ds/instana-agent -- sh -c 'ss -tlnp | grep 4317'"
+          - ""
+          - "To check agent logs:"
+          - "  kubectl -n {{ instana_namespace }} logs ds/instana-agent --tail=50 | grep -i 'kubernetes\\|Activated\\|otlp\\|ERROR'"
+          - ""
+          - "See instana/docs/13-k8s-agent-install.md for full verification steps."
+      tags: instana

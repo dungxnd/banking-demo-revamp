@@ -1,0 +1,59 @@
+---
+# Waits for the register endpoint to be reachable, then POSTs each seed user.
+# Tasks run on the remote host (EC2) so localhost:80 resolves to Kong's hostPort.
+# Idempotent: 409 (phone already registered) is treated as success — re-running
+# the playbook after the first seed never fails or creates duplicates.
+
+- name: Wait for register endpoint to be ready
+  ansible.builtin.command:
+    cmd: >
+      curl -s -o /dev/null -w "%{http_code}"
+      -X POST {{ seed_api_base_url }}/api/users
+      -H "Content-Type: application/json"
+      -d '{"phone":"0000000000","username":"_probe","password":"_probe"}'
+  register: probe
+  # Any structured HTTP response (201/400/409) means Kong + api-producer + auth-service are up.
+  # curl exits non-zero only on connection errors — we check the status code ourselves.
+  # Do NOT use -f: it makes curl exit non-zero on 4xx/5xx, leaving stdout empty.
+  until: probe.stdout in ['201', '400', '409']
+  retries: 20
+  delay: 10
+  changed_when: false
+  failed_when: false
+  become: false
+  tags: seed
+
+- name: Register seed users
+  ansible.builtin.command:
+    cmd: >
+      curl -s -w "\n%{http_code}"
+      -X POST {{ seed_api_base_url }}/api/users
+      -H "Content-Type: application/json"
+      -d '{"phone":"{{ item.phone }}","username":"{{ item.username }}","password":"{{ item.password }}"}'
+  loop: "{{ seed_users }}"
+  loop_control:
+    label: "{{ item.username }} ({{ item.phone }})"
+  register: seed_results
+  # 409 = phone already registered — idempotent, not a failure.
+  failed_when: >
+    seed_results.rc != 0 and
+    (seed_results.stdout_lines | last) not in ['201', '409']
+  changed_when: (seed_results.stdout_lines | last) == '201'
+  become: false
+  tags: seed
+
+- name: Show seed results
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.username }} ({{ item.item.phone }}) —
+      {% set status = item.stdout_lines | last %}
+      {% set body   = item.stdout_lines[:-1] | join('') | from_json %}
+      {% if status == '201' %}created,
+      account_number={{ body.account_number }},
+      balance={{ body.balance }}
+      {% else %}already exists (skipped)
+      {% endif %}
+  loop: "{{ seed_results.results }}"
+  loop_control:
+    label: "{{ item.item.username }}"
+  tags: seed

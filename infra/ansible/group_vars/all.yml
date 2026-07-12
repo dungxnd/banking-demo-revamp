@@ -1,0 +1,40 @@
+---
+# Static application configuration — commit this file.
+# Infrastructure variables (server IP, region) are in the Terraform-generated
+# group_vars/all.yml which is git-ignored.
+
+# ── Repository ────────────────────────────────────────────────────────────────
+app_repo: https://github.com/DungxND/banking-demo.git
+app_repo_version: golang          # branch, tag, or SHA to deploy
+
+# ── k3s ───────────────────────────────────────────────────────────────────────
+k3s_version: latest               # pin to e.g. "v1.32.1+k3s1" for reproducibility
+
+# ── Helm deployment ───────────────────────────────────────────────────────────
+helm_release_name: banking-demo
+helm_chart_dir: "{{ app_dir }}/helm"
+helm_namespace: banking
+helm_extra_args: ""               # e.g. "--set kong.replicas=2"
+
+# ── Deployment paths ──────────────────────────────────────────────────────────
+app_dir: /opt/banking-demo
+
+# ── Healthcheck (Kong hostPort 80) ────────────────────────────────────────────
+app_healthcheck_url: "http://localhost:80"
+app_healthcheck_retries: 20
+app_healthcheck_delay: 15
+
+# ── Seed users ────────────────────────────────────────────────────────────────
+# Override seed_users here to change the default demo accounts.
+# Passwords are plain-text — bcrypt-hashed by the auth-service on insert.
+# Re-running the seed role is safe: duplicate phones return 409 (skipped).
+seed_users:
+  - username: alice
+    phone: "0100000001"
+    password: "password123"
+  - username: bob
+    phone: "0100000002"
+    password: "password123"
+  - username: charlie
+    phone: "0100000003"
+    password: "password123"
