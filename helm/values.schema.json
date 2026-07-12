@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "banking-demo values",
+  "description": "Top-level Helm values for banking-demo (Helm 4 / k8s >= 1.25)",
+  "type": "object",
+  "properties": {
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "tag": { "type": "string", "description": "PostgreSQL image tag" }
+          }
+        }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "tag": { "type": "string", "description": "Redis image tag" }
+          }
+        }
+      }
+    },
+    "nats": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "tag": { "type": "string", "description": "NATS image tag" }
+          }
+        }
+      }
+    },
+    "kong": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "tag": { "type": "string", "description": "Kong image tag" }
+          }
+        }
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        }
+      }
+    },
+    "api-producer": {
+      "description": "Stateless HTTP entry-point — no database or Redis secret keys required",
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "required": ["repository", "tag"],
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "secretRef": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "keys": {
+              "type": "object",
+              "description": "Intentionally empty — api-producer has no DB or Redis secret keys",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "natsSecretRef": {
+          "type": "object",
+          "required": ["name", "key"],
+          "properties": {
+            "name": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": { "type": "object" },
+            "limits": { "type": "object" }
+          }
+        }
+      }
+    }
+  },
+  "patternProperties": {
+    "^(auth|account|transfer|notification)-service$": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "required": ["repository", "tag"],
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "secretRef": {
+          "type": "object",
+          "required": ["name", "keys"],
+          "properties": {
+            "name": { "type": "string" },
+            "keys": {
+              "type": "object",
+              "required": ["databaseUrl", "redisUrl"],
+              "properties": {
+                "databaseUrl": { "type": "string" },
+                "redisUrl": { "type": "string" }
+              }
+            }
+          }
+        },
+        "natsSecretRef": {
+          "type": "object",
+          "required": ["name", "key"],
+          "properties": {
+            "name": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": { "type": "object" },
+            "limits": { "type": "object" }
+          }
+        }
+      }
+    }
+  }
+}

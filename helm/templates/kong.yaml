@@ -1,0 +1,185 @@
+{{- if .Values.kong.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "banking-demo.kong.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.kong.fullname" . }}
+    {{- include "banking-demo.kong.labels" . | nindent 4 }}
+data:
+  {{ .Values.kong.configFileName }}: |
+    _format_version: "3.0"
+    _transform: true
+
+    services:
+    {{- range .Values.kong.backends }}
+      - name: {{ .name }}
+        url: {{ .url | quote }}
+        routes:
+        {{- range .routes }}
+          - name: {{ .name }}
+            paths:
+            {{- range .paths }}
+              - {{ . | quote }}
+            {{- end }}
+            strip_path: {{ if kindIs "invalid" .strip_path }}true{{ else }}{{ .strip_path }}{{ end }}
+            {{- if .protocols }}
+            protocols:
+            {{- range .protocols }}
+              - {{ . }}
+            {{- end }}
+            {{- end }}
+        {{- end }}
+        plugins:
+          - name: cors
+            config:
+              {{- $origins := $.Values.kong.corsOrigins }}
+              {{- /* Allow global.corsOrigins to override the chart default */}}
+              {{- if $.Values.global }}
+              {{- if $.Values.global.corsOrigins }}
+              {{- $origins = $.Values.global.corsOrigins }}
+              {{- end }}
+              {{- end }}
+              {{- if not $origins }}
+              {{- $origins = list "*" }}
+              {{- end }}
+              origins:
+                {{- if kindIs "string" $origins }}
+                - {{ $origins | quote }}
+                {{- else }}
+                {{- range $origins }}
+                - {{ . | quote }}
+                {{- end }}
+                {{- end }}
+              credentials: {{ $.Values.kong.corsCredentials }}
+              methods:
+              {{- range $.Values.kong.corsMethods }}
+                - {{ . }}
+              {{- end }}
+              headers:
+              {{- range $.Values.kong.corsHeaders }}
+                - {{ . }}
+              {{- end }}
+          {{- if $.Values.kong.extraPlugins }}
+          {{- range $.Values.kong.extraPlugins }}
+          - name: {{ .name }}
+            {{- if .config }}
+            config:
+              {{- toYaml .config | nindent 14 }}
+            {{- end }}
+          {{- end }}
+          {{- end }}
+    {{- end }}
+
+    {{- if .Values.kong.globalPlugins }}
+    plugins:
+    {{- range .Values.kong.globalPlugins }}
+      - name: {{ .name }}
+        {{- if .config }}
+        config:
+          {{- toYaml .config | nindent 10 }}
+        {{- end }}
+    {{- end }}
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "banking-demo.kong.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.kong.fullname" . }}
+    {{- include "banking-demo.kong.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.kong.replicas }}
+  # Recreate is required for hostPort workloads on single-node clusters.
+  # RollingUpdate would leave the old pod holding port 80 while the new pod
+  # tries to bind the same hostPort — the new pod stays Pending forever.
+  # rollingUpdate must be explicitly null — Kubernetes forbids it being present
+  # when type is Recreate, and SSA will reject the update otherwise.
+  strategy:
+    type: {{ .Values.kong.updateStrategy | default "Recreate" }}
+    rollingUpdate: null
+  selector:
+    matchLabels:
+      {{- include "banking-demo.kong.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "banking-demo.kong.fullname" . }}
+        {{- include "banking-demo.kong.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.kong.securityContext.pod }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: kong
+          image: "{{ .Values.kong.image.repository }}:{{ .Values.kong.image.tag }}"
+          imagePullPolicy: {{ .Values.kong.image.pullPolicy }}
+          {{- with .Values.kong.securityContext.container }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+          {{- range $key, $val := .Values.kong.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+          {{- end }}
+          ports:
+            - containerPort: {{ .Values.kong.proxyPort }}
+              name: {{ .Values.kong.proxyPortName }}
+              {{- if .Values.kong.service.hostPort }}
+              hostPort: {{ .Values.kong.service.hostPort }}
+              {{- end }}
+            - containerPort: {{ .Values.kong.adminPort }}
+              name: {{ .Values.kong.adminPortName }}
+          volumeMounts:
+            - name: kong-config
+              mountPath: {{ .Values.kong.configMountPath }}
+              readOnly: true
+          resources:
+            {{- toYaml .Values.kong.resources | nindent 12 }}
+          {{- if ((.Values.kong.readinessProbe).enabled) }}
+          readinessProbe:
+            exec:
+              command: {{ toJson .Values.kong.readinessProbe.command }}
+            initialDelaySeconds: {{ .Values.kong.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kong.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.kong.readinessProbe.timeoutSeconds }}
+          {{- end }}
+          {{- if ((.Values.kong.livenessProbe).enabled) }}
+          livenessProbe:
+            exec:
+              command: {{ toJson .Values.kong.livenessProbe.command }}
+            initialDelaySeconds: {{ .Values.kong.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kong.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.kong.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.kong.livenessProbe.failureThreshold }}
+          {{- end }}
+      volumes:
+        - name: kong-config
+          configMap:
+            name: {{ include "banking-demo.kong.configMapName" . }}
+---
+# Kong ClusterIP Service — used for intra-cluster communication only
+# (e.g. if an Ingress controller is placed in front of Kong).
+# External access on port 80 is handled by hostPort on the pod above.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "banking-demo.kong.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.kong.fullname" . }}
+    {{- include "banking-demo.kong.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.kong.service.type }}
+  selector:
+    {{- include "banking-demo.kong.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: {{ .Values.kong.proxyPortName }}
+      port: {{ .Values.kong.proxyPort }}
+      targetPort: {{ .Values.kong.proxyPort }}
+{{- end }}

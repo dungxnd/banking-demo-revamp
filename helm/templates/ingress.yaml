@@ -1,0 +1,49 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.ingress.name | default "banking-ingress" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "banking-demo.labels" . | nindent 4 }}
+  annotations:
+    {{- if eq .Values.ingress.className "haproxy" }}
+    haproxy.org/backend-protocol: "http"
+    haproxy.org/forwardfor: "true"
+    haproxy.org/timeout-tunnel: "1h"
+    haproxy.org/maxconn-server: "1000"
+    {{- end }}
+    {{- if eq .Values.ingress.className "traefik" }}
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    {{- if .Values.ingress.host }}
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+        {{- range .Values.ingress.paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ .serviceName }}
+                port:
+                  number: {{ .servicePort }}
+        {{- end }}
+    {{- else }}
+    {{- /* No host — matches any IP (EC2 without domain) */}}
+    - http:
+        paths:
+        {{- range .Values.ingress.paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ .serviceName }}
+                port:
+                  number: {{ .servicePort }}
+        {{- end }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,556 @@
+# ============================================================
+# values.yaml — version manifest and shared config.
+#
+# Edit THIS file to:
+#   - bump an image tag for any service or infra component
+#   - change credentials / connection strings
+#   - toggle features (secret.enabled, dbMigration.enabled, etc.)
+#   - tune resources or CORS
+# ============================================================
+
+# ── Global ───────────────────────────────────────────────────
+global:
+  namespace: banking
+  secretName: banking-db-secret
+  corsOrigins: "*"
+
+# ── Secrets ──────────────────────────────────────────────────
+secret:
+  enabled: true
+  postgresUser: banking
+  postgresPassword: bankingpass
+  postgresDb: banking
+  databaseUrl: "postgres://banking:bankingpass@postgres:5432/banking?sslmode=disable"
+  redisUrl: "redis://redis:6379"
+  natsUrl: "nats://nats:4222"
+
+# ── DB Migration Job ─────────────────────────────────────────
+dbMigration:
+  enabled: false
+  image: postgres:18
+  hookWeight: "-5"
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "10m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+# ── PostgreSQL ───────────────────────────────────────────────
+postgres:
+  enabled: true
+  replicas: 1
+  image:
+    repository: postgres
+    tag: "18"
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+    portName: postgres
+    clusterIP: ""
+  hook:
+    preInstall: true
+    preUpgrade: true
+    weight: "-5"
+  secretRef:
+    name: ""   # empty → uses banking-demo.secretName helper
+    keys:
+      user: POSTGRES_USER
+      password: POSTGRES_PASSWORD
+      db: POSTGRES_DB
+  storage:
+    volumeName: postgres-data
+    mountPath: /var/lib/postgresql
+    storageClassName: local-path
+    size: 5Gi
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "10m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  securityContext:
+    pod: {}
+    container: {}
+  readinessProbe:
+    enabled: true
+    user: banking
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+
+# ── Redis ────────────────────────────────────────────────────
+redis:
+  enabled: true
+  replicas: 1
+  image:
+    repository: redis
+    tag: "8-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    port: 6379
+    portName: redis
+    clusterIP: ""
+  hook:
+    preInstall: true
+    preUpgrade: true
+    weight: "-5"
+  storage:
+    volumeName: redis-data
+    mountPath: /data
+    storageClassName: local-path
+    size: 1Gi
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "10m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+  securityContext:
+    pod: {}
+    container: {}
+  readinessProbe:
+    enabled: true
+    command: ["redis-cli", "ping"]
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    timeoutSeconds: 2
+
+# ── NATS ─────────────────────────────────────────────────────
+nats:
+  enabled: true
+  image:
+    repository: nats
+    tag: "2-alpine"
+    pullPolicy: IfNotPresent
+  jetstream:
+    enabled: true
+    storageDir: /data
+    storage:
+      storageClass: local-path
+      size: 1Gi
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "10m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+  securityContext:
+    container: {}
+  exporter:
+    enabled: true
+    image:
+      repository: natsio/prometheus-nats-exporter
+      tag: "0.20.1"
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        memory: "8Mi"
+        cpu: "5m"
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+
+# ── Kong ─────────────────────────────────────────────────────
+kong:
+  enabled: true
+  replicas: 1
+  image:
+    repository: kong
+    tag: "3.9"
+    pullPolicy: IfNotPresent
+  configFileName: kong.yml
+  configMountPath: /kong
+  proxyPort: 8000
+  proxyPortName: proxy
+  adminPort: 8001
+  adminPortName: admin
+
+  # k3s / bare-metal EC2 — no cloud LoadBalancer available.
+  # hostPort binds port 80 directly on the node NIC.
+  # Switch to LoadBalancer + remove hostPort when moving to EKS/GKE.
+  service:
+    type: ClusterIP
+    hostPort: 80
+
+  # Recreate is mandatory on single-node clusters with hostPort.
+  # RollingUpdate causes the new pod to stay Pending (port 80 conflict).
+  updateStrategy: Recreate
+
+  env:
+    KONG_DATABASE: "off"
+    KONG_DECLARATIVE_CONFIG: "/kong/kong.yml"
+    KONG_PROXY_ACCESS_LOG: "/dev/stdout"
+    KONG_ADMIN_ACCESS_LOG: "/dev/stdout"
+    KONG_PROXY_ERROR_LOG: "/dev/stderr"
+    KONG_ADMIN_ERROR_LOG: "/dev/stderr"
+    KONG_ADMIN_LISTEN: "127.0.0.1:8001"
+    KONG_PROXY_LISTEN: "0.0.0.0:8000"
+    KONG_NGINX_WORKER_PROCESSES: "1"
+    KONG_TRACING_INSTRUMENTATIONS: all
+    KONG_TRACING_SAMPLING_RATE: "1.0"
+    KONG_OPENTELEMETRY_TRACING: "on"
+    # Trust X-Forwarded-* from any upstream load balancer / cloud NLB.
+    KONG_TRUSTED_IPS: "0.0.0.0/0,::/0"
+    KONG_REAL_IP_HEADER: "X-Forwarded-For"
+
+  # ── Backend routing table ──────────────────────────────────
+  # Route priority = longest prefix wins.
+  # /api and /ws must appear before / (catch-all).
+  backends:
+    - name: api-producer
+      url: "http://api-producer:8080"
+      routes:
+        - name: api-route
+          paths: ["/api"]
+          strip_path: false
+
+    - name: notification-service
+      url: "http://notification-service:8004"
+      routes:
+        - name: notification-ws-route
+          paths: ["/ws"]
+          strip_path: false
+          protocols: ["http", "https"]
+
+    # Frontend last — broadest match, lowest specificity.
+    - name: frontend
+      url: "http://frontend:80"
+      routes:
+        - name: frontend-route
+          paths: ["/"]
+          strip_path: false
+
+  # ── CORS ──────────────────────────────────────────────────
+  # corsCredentials must be false when origins is "*".
+  corsOrigins: "*"
+  corsCredentials: false
+  corsMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"]
+  corsHeaders:
+    - Accept
+    - Accept-Version
+    - Authorization
+    - Content-Length
+    - Content-MD5
+    - Content-Type
+    - Date
+    - X-Session
+    - X-Admin-Secret
+
+  # ── Global plugins ─────────────────────────────────────────
+  globalPlugins:
+    - name: prometheus
+    # opentelemetry plugin — propagates W3C traceparent into upstream HTTP
+    # requests so api-producer receives the Kong span as its parent, linking
+    # the full trace waterfall: Traefik → Kong → api-producer → NATS services.
+    #
+    # traces_endpoint: Kong POSTs to this URL verbatim (no path appended).
+    # Instana agent OTLP/HTTP: POST /v1/traces → 200 OK (confirmed).
+    # IBM docs otlphttp exporter uses :4318 base; the SDK appends /v1/traces.
+    # Kong is not the OTel SDK — it must include the full path explicitly.
+    #   traces_endpoint: "...4318/v1/traces"   ✓ confirmed working
+    #   traces_endpoint: "...4318"             ✗ returns 404
+    - name: opentelemetry
+      config:
+        traces_endpoint: "http://instana-agent.instana-agent.svc.cluster.local:4318/v1/traces"
+        resource_attributes:
+          service.name: kong
+          service.namespace: banking-demo
+        propagation:
+          default_format: w3c
+          extract:
+            - w3c
+          inject:
+            - w3c
+
+  # ── Per-service extra plugins ──────────────────────────────
+  extraPlugins:
+    - name: rate-limiting
+      config:
+        minute: 120
+        policy: local
+        error_code: 429
+        error_message: "Rate limit exceeded"
+    - name: request-size-limiting
+      config:
+        allowed_payload_size: 4
+        size_unit: megabytes
+
+  readinessProbe:
+    enabled: true
+    command: ["kong", "health"]
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 10
+
+  livenessProbe:
+    enabled: true
+    command: ["kong", "health"]
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "10m"
+    limits:
+      memory: "512Mi"
+      cpu: "1000m"
+
+  securityContext:
+    pod:
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+
+# ── Ingress ───────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  paths: []
+
+# ── Frontend ─────────────────────────────────────────────────
+frontend:
+  enabled: true
+  replicas: 1
+  image:
+    repository: ghcr.io/dungxnd/banking-demo/frontend
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 80
+    portName: http
+  resources:
+    requests:
+      memory: "32Mi"
+      cpu: "10m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+  securityContext:
+    pod: {}
+    container: {}
+  readinessProbe:
+    enabled: true
+    path: /
+    port: 80
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# ── App services ─────────────────────────────────────────────
+# To roll a new image: --set auth-service.image.tag=<sha>
+# To scale:           --set auth-service.replicas=2
+
+auth-service:
+  enabled: true
+  replicas: 1
+  image:
+    repository: ghcr.io/dungxnd/banking-demo/auth-service
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 8001
+    portName: http
+  secretRef:
+    name: banking-db-secret
+    keys:
+      databaseUrl: DATABASE_URL
+      redisUrl: REDIS_URL
+  natsSecretRef:
+    name: nats-connection-secret
+    key: NATS_URL
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "10m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  securityContext:
+    pod:
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+  readinessProbe:
+    enabled: true
+    path: /health
+    port: 8001
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+account-service:
+  enabled: true
+  replicas: 1
+  image:
+    repository: ghcr.io/dungxnd/banking-demo/account-service
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 8002
+    portName: http
+  secretRef:
+    name: banking-db-secret
+    keys:
+      databaseUrl: DATABASE_URL
+      redisUrl: REDIS_URL
+  natsSecretRef:
+    name: nats-connection-secret
+    key: NATS_URL
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "10m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  securityContext:
+    pod:
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+  readinessProbe:
+    enabled: true
+    path: /health
+    port: 8002
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+transfer-service:
+  enabled: true
+  replicas: 1
+  image:
+    repository: ghcr.io/dungxnd/banking-demo/transfer-service
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 8003
+    portName: http
+  secretRef:
+    name: banking-db-secret
+    keys:
+      databaseUrl: DATABASE_URL
+      redisUrl: REDIS_URL
+  natsSecretRef:
+    name: nats-connection-secret
+    key: NATS_URL
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "10m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  securityContext:
+    pod:
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+  readinessProbe:
+    enabled: true
+    path: /health
+    port: 8003
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+notification-service:
+  enabled: true
+  replicas: 1
+  image:
+    repository: ghcr.io/dungxnd/banking-demo/notification-service
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 8004
+    portName: http
+  secretRef:
+    name: banking-db-secret
+    keys:
+      databaseUrl: DATABASE_URL
+      redisUrl: REDIS_URL
+  natsSecretRef:
+    name: nats-connection-secret
+    key: NATS_URL
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "10m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  securityContext:
+    pod:
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+  readinessProbe:
+    enabled: true
+    path: /health
+    port: 8004
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+# api-producer: stateless HTTP→NATS proxy, no DB/Redis
+api-producer:
+  enabled: true
+  replicas: 1
+  image:
+    repository: ghcr.io/dungxnd/banking-demo/api-producer
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 8080
+    portName: http
+  secretRef:
+    name: banking-db-secret
+    keys: {}
+  natsSecretRef:
+    name: nats-connection-secret
+    key: NATS_URL
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "10m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  securityContext:
+    pod: {}
+    container: {}
+  readinessProbe:
+    enabled: true
+    path: /health
+    port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 10

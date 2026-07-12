@@ -1,0 +1,121 @@
+{{- $svc := index .Values "api-producer" }}
+{{- if $svc.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "banking-demo.api-producer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.api-producer.fullname" . }}
+    {{- include "banking-demo.api-producer.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas }}
+  selector:
+    matchLabels:
+      {{- include "banking-demo.api-producer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: {{ $svc.service.port | quote }}
+      labels:
+        app: {{ include "banking-demo.api-producer.fullname" . }}
+        {{- include "banking-demo.api-producer.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with $svc.securityContext.pod }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $svc.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml $svc.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-nats
+          image: busybox:1.38
+          command: ['sh', '-c', 'until nc -z nats 4222; do echo "waiting for nats"; sleep 2; done']
+          resources:
+            requests:
+              cpu: "5m"
+              memory: "8Mi"
+            limits:
+              cpu: "50m"
+              memory: "16Mi"
+      containers:
+        - name: api-producer
+          image: "{{ $svc.image.repository }}:{{ $svc.image.tag }}"
+          imagePullPolicy: {{ $svc.image.pullPolicy }}
+          {{- with $svc.securityContext.container }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: {{ $svc.service.port }}
+              name: {{ $svc.service.portName }}
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(NODE_IP):4317"
+            - name: INSTANA_AGENT_HOST
+              value: "$(NODE_IP)"
+            - name: OTEL_SERVICE_NAME
+              value: api-producer
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.namespace=banking-demo"
+            {{- if $svc.secretRef.keys.redisUrl }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.secretRef.name }}
+                  key: {{ $svc.secretRef.keys.redisUrl }}
+            {{- end }}
+            {{- if $svc.natsSecretRef }}
+            - name: NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.natsSecretRef.name }}
+                  key: {{ $svc.natsSecretRef.key }}
+            {{- else }}
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            {{- end }}
+            - name: CORS_ORIGINS
+              value: {{ include "banking-demo.corsOrigins" . | quote }}
+            {{- range $k, $v := $svc.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+          {{- if $svc.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ $svc.readinessProbe.path }}
+              port: {{ $svc.readinessProbe.port }}
+            initialDelaySeconds: {{ $svc.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ $svc.readinessProbe.periodSeconds }}
+            {{- if $svc.readinessProbe.timeoutSeconds }}
+            timeoutSeconds: {{ $svc.readinessProbe.timeoutSeconds }}
+            {{- end }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "banking-demo.api-producer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.api-producer.fullname" . }}
+    {{- include "banking-demo.api-producer.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "banking-demo.api-producer.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ $svc.service.port }}
+      targetPort: {{ $svc.service.port }}
+      name: {{ $svc.service.portName }}
+{{- end }}

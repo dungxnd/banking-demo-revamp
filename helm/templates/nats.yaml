@@ -1,0 +1,162 @@
+{{- if .Values.nats.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "banking-demo.nats.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.nats.fullname" . }}
+    {{- include "banking-demo.nats.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "banking-demo.nats.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "banking-demo.nats.fullname" . }}
+        {{- include "banking-demo.nats.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.nats.jetstream.enabled }}
+      volumes:
+        - name: nats-data
+          persistentVolumeClaim:
+            claimName: {{ include "banking-demo.nats.fullname" . }}-data
+      {{- end }}
+      containers:
+        - name: nats
+          image: "{{ .Values.nats.image.repository }}:{{ .Values.nats.image.tag }}"
+          imagePullPolicy: {{ .Values.nats.image.pullPolicy }}
+          args:
+            {{- if .Values.nats.jetstream.enabled }}
+            - "-js"
+            - "--store_dir"
+            - {{ .Values.nats.jetstream.storageDir | quote }}
+            {{- end }}
+            - "--http_port"
+            - "8222"
+          {{- if .Values.nats.jetstream.enabled }}
+          volumeMounts:
+            - name: nats-data
+              mountPath: {{ .Values.nats.jetstream.storageDir }}
+          {{- end }}
+          ports:
+            - containerPort: 4222
+              name: client
+            - containerPort: 8222
+              name: monitoring
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.nats.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.nats.securityContext.container | nindent 12 }}
+---
+{{- if .Values.nats.jetstream.enabled }}
+# PersistentVolumeClaim for JetStream stream state (BANKING_EVENTS).
+# Survives pod restarts; account-service resumes from last ACK offset.
+#
+# resource-policy: keep — helm uninstall deliberately skips this PVC so
+# JetStream stream state is not lost on a chart upgrade or accidental
+# helm uninstall. Delete it explicitly with nuke.sh when a clean wipe
+# is actually intended.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "banking-demo.nats.fullname" . }}-data
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "banking-demo.nats.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.nats.jetstream.storage.storageClass }}
+  storageClassName: {{ .Values.nats.jetstream.storage.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.nats.jetstream.storage.size }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "banking-demo.nats.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.nats.fullname" . }}
+    {{- include "banking-demo.nats.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "banking-demo.nats.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 4222
+      targetPort: 4222
+      name: client
+    - port: 8222
+      targetPort: 8222
+      name: monitoring
+---
+# prometheus-nats-exporter: scrapes /varz /connz /subsz from the NATS HTTP
+# monitoring port and exposes metrics at :7777/metrics for Prometheus.
+{{- if .Values.nats.exporter.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "banking-demo.nats.fullname" . }}-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.nats.fullname" . }}-exporter
+    {{- include "banking-demo.nats.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "banking-demo.nats.fullname" . }}-exporter
+  template:
+    metadata:
+      labels:
+        app: {{ include "banking-demo.nats.fullname" . }}-exporter
+    spec:
+      containers:
+        - name: nats-exporter
+          image: "{{ .Values.nats.exporter.image.repository }}:{{ .Values.nats.exporter.image.tag }}"
+          imagePullPolicy: {{ .Values.nats.exporter.image.pullPolicy }}
+          args:
+            - "-varz"
+            - "-connz"
+            - "-subz"
+            - "http://{{ include "banking-demo.nats.fullname" . }}:8222"
+          ports:
+            - containerPort: 7777
+              name: metrics
+          resources:
+            {{- toYaml .Values.nats.exporter.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "banking-demo.nats.fullname" . }}-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.nats.fullname" . }}-exporter
+    {{- include "banking-demo.nats.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "7777"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: {{ include "banking-demo.nats.fullname" . }}-exporter
+  ports:
+    - port: 7777
+      targetPort: 7777
+      name: metrics
+{{- end }}
+{{- end }}

@@ -1,0 +1,137 @@
+{{- $svc := index .Values "notification-service" }}
+{{- if $svc.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "banking-demo.notification-service.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.notification-service.fullname" . }}
+    {{- include "banking-demo.notification-service.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas }}
+  selector:
+    matchLabels:
+      {{- include "banking-demo.notification-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: {{ $svc.service.port | quote }}
+      labels:
+        app: {{ include "banking-demo.notification-service.fullname" . }}
+        {{- include "banking-demo.notification-service.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with $svc.securityContext.pod }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $svc.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml $svc.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.38
+          command: ['sh', '-c', 'until nc -z postgres 5432; do echo "waiting for postgres"; sleep 2; done']
+          resources:
+            requests:
+              cpu: "5m"
+              memory: "8Mi"
+            limits:
+              cpu: "50m"
+              memory: "16Mi"
+        - name: wait-for-nats
+          image: busybox:1.38
+          command: ['sh', '-c', 'until nc -z nats 4222; do echo "waiting for nats"; sleep 2; done']
+          resources:
+            requests:
+              cpu: "5m"
+              memory: "8Mi"
+            limits:
+              cpu: "50m"
+              memory: "16Mi"
+      containers:
+        - name: notification-service
+          image: "{{ $svc.image.repository }}:{{ $svc.image.tag }}"
+          imagePullPolicy: {{ $svc.image.pullPolicy }}
+          {{- with $svc.securityContext.container }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: {{ $svc.service.port }}
+              name: {{ $svc.service.portName }}
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(NODE_IP):4317"
+            - name: INSTANA_AGENT_HOST
+              value: "$(NODE_IP)"
+            - name: OTEL_SERVICE_NAME
+              value: notification-service
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.namespace=banking-demo"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.secretRef.name }}
+                  key: {{ $svc.secretRef.keys.databaseUrl }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.secretRef.name }}
+                  key: {{ $svc.secretRef.keys.redisUrl }}
+            {{- if $svc.natsSecretRef }}
+            - name: NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.natsSecretRef.name }}
+                  key: {{ $svc.natsSecretRef.key }}
+            {{- else }}
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            {{- end }}
+            - name: CORS_ORIGINS
+              value: {{ include "banking-demo.corsOrigins" . | quote }}
+            {{- range $k, $v := $svc.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- if $svc.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ $svc.readinessProbe.path }}
+              port: {{ $svc.readinessProbe.port }}
+            initialDelaySeconds: {{ $svc.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ $svc.readinessProbe.periodSeconds }}
+            {{- if $svc.readinessProbe.timeoutSeconds }}
+            timeoutSeconds: {{ $svc.readinessProbe.timeoutSeconds }}
+            {{- end }}
+            {{- if $svc.readinessProbe.failureThreshold }}
+            failureThreshold: {{ $svc.readinessProbe.failureThreshold }}
+            {{- end }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "banking-demo.notification-service.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "banking-demo.notification-service.fullname" . }}
+    {{- include "banking-demo.notification-service.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "banking-demo.notification-service.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ $svc.service.port }}
+      targetPort: {{ $svc.service.port }}
+      name: {{ $svc.service.portName }}
+{{- end }}

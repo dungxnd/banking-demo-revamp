@@ -1,0 +1,68 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "banking-demo.postgres.labels" . | nindent 4 }}
+data:
+  # PostgreSQL runs /docker-entrypoint-initdb.d/*.sql files in alphabetical
+  # order on first start (when the data directory is empty).
+  # Files are named 01–03 to enforce execution order.
+
+  01-schema.sql: |
+    -- 000001: core tables
+    CREATE TABLE IF NOT EXISTS users (
+        id             BIGSERIAL PRIMARY KEY,
+        phone          VARCHAR(20)  NOT NULL UNIQUE,
+        account_number VARCHAR(20)  NOT NULL UNIQUE,
+        username       VARCHAR(50)  NOT NULL,
+        password_hash  VARCHAR(255) NOT NULL,
+        balance        BIGINT       NOT NULL DEFAULT 100000,
+        is_admin       BOOLEAN      NOT NULL DEFAULT FALSE
+    );
+    CREATE INDEX IF NOT EXISTS idx_users_phone          ON users (phone);
+    CREATE INDEX IF NOT EXISTS idx_users_account_number ON users (account_number);
+    CREATE INDEX IF NOT EXISTS idx_users_username       ON users (username);
+
+    CREATE TABLE IF NOT EXISTS transfers (
+        id         BIGSERIAL PRIMARY KEY,
+        from_user  BIGINT NOT NULL REFERENCES users (id),
+        to_user    BIGINT NOT NULL REFERENCES users (id),
+        amount     BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+        id         BIGSERIAL PRIMARY KEY,
+        user_id    BIGINT      NOT NULL REFERENCES users (id),
+        message    VARCHAR(255) NOT NULL,
+        is_read    BOOLEAN      NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications (user_id);
+
+  02-constraints.sql: |
+    -- 000002: invariants + missing FK indexes
+    ALTER TABLE users
+        ADD CONSTRAINT users_balance_non_negative CHECK (balance >= 0);
+    ALTER TABLE transfers
+        ADD CONSTRAINT transfers_amount_positive CHECK (amount > 0);
+    CREATE INDEX IF NOT EXISTS idx_transfers_from_user
+        ON transfers (from_user);
+    CREATE INDEX IF NOT EXISTS idx_transfers_to_user
+        ON transfers (to_user);
+    CREATE INDEX IF NOT EXISTS idx_transfers_from_user_created_at
+        ON transfers (from_user, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_id_created_at
+        ON notifications (user_id, created_at DESC);
+
+
+  04-stats-tracking.sql: |
+    -- Enable statistics collection for the Instana PostgreSQL sensor.
+    ALTER SYSTEM SET track_counts = on;
+    ALTER SYSTEM SET track_io_timing = on;
+    ALTER SYSTEM SET track_activities = on;
+    SELECT pg_reload_conf();
+{{- end }}
