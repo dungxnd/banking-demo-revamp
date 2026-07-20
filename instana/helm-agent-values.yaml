@@ -18,7 +18,7 @@
 #     --set agent.key="${INSTANA_AGENT_KEY}" \
 #     --set agent.downloadKey="${INSTANA_DOWNLOAD_KEY}" \
 #     --set agent.endpointHost="${INSTANA_ENDPOINT_HOST}" \
-#     --set agent.env.INSTANA_GIT_REMOTE_REPOSITORY="https://github.com/dungxnd/banking-demo.git" \
+#     --set agent.env.INSTANA_GIT_REMOTE_REPOSITORY="https://github.com/dungxnd/banking-demo-revamp.git" \
 #     --set agent.env.INSTANA_GIT_REMOTE_BRANCH="main" \
 #     --set "agent.env.INSTANA_GIT_REMOTE_USERNAME=${GITHUB_PAT}" \
 #     instana-agent

@@ -322,7 +322,7 @@ frontend:
   enabled: true
   replicas: 1
   image:
-    repository: ghcr.io/dungxnd/banking-demo/frontend
+    repository: ghcr.io/dungxnd/banking-demo-revamp/frontend
     tag: latest
     pullPolicy: Always
   service:
@@ -353,7 +353,7 @@ auth-service:
   enabled: true
   replicas: 1
   image:
-    repository: ghcr.io/dungxnd/banking-demo/auth-service
+    repository: ghcr.io/dungxnd/banking-demo-revamp/auth-service
     tag: latest
     pullPolicy: Always
   service:
@@ -395,7 +395,7 @@ account-service:
   enabled: true
   replicas: 1
   image:
-    repository: ghcr.io/dungxnd/banking-demo/account-service
+    repository: ghcr.io/dungxnd/banking-demo-revamp/account-service
     tag: latest
     pullPolicy: Always
   service:
@@ -437,7 +437,7 @@ transfer-service:
   enabled: true
   replicas: 1
   image:
-    repository: ghcr.io/dungxnd/banking-demo/transfer-service
+    repository: ghcr.io/dungxnd/banking-demo-revamp/transfer-service
     tag: latest
     pullPolicy: Always
   service:
@@ -479,7 +479,7 @@ notification-service:
   enabled: true
   replicas: 1
   image:
-    repository: ghcr.io/dungxnd/banking-demo/notification-service
+    repository: ghcr.io/dungxnd/banking-demo-revamp/notification-service
     tag: latest
     pullPolicy: Always
   service:
@@ -522,7 +522,7 @@ api-producer:
   enabled: true
   replicas: 1
   image:
-    repository: ghcr.io/dungxnd/banking-demo/api-producer
+    repository: ghcr.io/dungxnd/banking-demo-revamp/api-producer
     tag: latest
     pullPolicy: Always
   service:

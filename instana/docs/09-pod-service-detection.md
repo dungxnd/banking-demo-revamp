@@ -120,7 +120,7 @@ generic **HTTP** service rather than a **Go** service. Concert's ingestion corre
 images to AP service records by technology type, and generic HTTP services (without a go-sensor
 process record) fall outside the correlation path.
 
-**Fixed in commit [`0e81f0f`](https://github.com/dungxnd/banking-demo/commit/0e81f0f686e89d58e907ab01953d224bbc597615)** —
+**Fixed:
 `instana.TracingHandlerFunc` added to `api-producer` in
 [`producer/main.go`](../../producer/main.go). `api-producer` now emits native `g.http` entry
 spans → Instana classifies it as technology **Go** (service type still displayed as **HTTP**,

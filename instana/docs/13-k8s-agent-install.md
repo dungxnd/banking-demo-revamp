@@ -94,7 +94,7 @@ helm upgrade --install instana-agent \
   --set agent.key="${INSTANA_AGENT_KEY}" \
   --set agent.downloadKey="${INSTANA_DOWNLOAD_KEY}" \
   --set agent.endpointHost="${INSTANA_ENDPOINT_HOST}" \
-  --set agent.env.INSTANA_GIT_REMOTE_REPOSITORY="https://github.com/dungxnd/banking-demo.git" \
+  --set agent.env.INSTANA_GIT_REMOTE_REPOSITORY="https://github.com/dungxnd/banking-demo-revamp.git" \
   --set agent.env.INSTANA_GIT_REMOTE_BRANCH="main" \
   --set "agent.env.INSTANA_GIT_REMOTE_USERNAME=${GITHUB_PAT}" \
   instana-agent
@@ -115,7 +115,7 @@ helm upgrade --install instana-agent \
 | `agent.key` | From Instana UI → Settings → Agents | Required — via `--set` only |
 | `agent.endpointHost` | e.g. `ingress-orange-saas.instana.io` | Required — via `--set` only |
 | `agent.endpointPort` | `443` | Set in values file |
-| `agent.env.INSTANA_GIT_REMOTE_REPOSITORY` | `https://github.com/dungxnd/banking-demo.git` | Via `--set` only |
+| `agent.env.INSTANA_GIT_REMOTE_REPOSITORY` | `https://github.com/dungxnd/banking-demo-revamp.git` | Via `--set` only |
 | `agent.env.INSTANA_GIT_REMOTE_BRANCH` | `main` | Via `--set` only |
 | `agent.env.INSTANA_GIT_REMOTE_USERNAME` | GitHub Fine-grained PAT | Via `--set` only — never commit |
 | `agent.env.INSTANA_GIT_REMOTE_PASSWORD` | *(omit entirely)* | Do NOT pass — CRD rejects null string |
@@ -174,7 +174,7 @@ spec:
     endpointHost: '<YOUR_INSTANA_BACKEND_HOST>'
     endpointPort: 443
     env:
-      INSTANA_GIT_REMOTE_REPOSITORY: "https://github.com/dungxnd/banking-demo.git"
+      INSTANA_GIT_REMOTE_REPOSITORY: "https://github.com/dungxnd/banking-demo-revamp.git"
       INSTANA_GIT_REMOTE_BRANCH: "main"
       INSTANA_GIT_REMOTE_USERNAME: "<YOUR_GITHUB_PAT>"  # Fine-grained PAT, Contents: read
       INSTANA_GIT_REMOTE_PASSWORD: ""                   # intentionally empty

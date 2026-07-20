@@ -4,7 +4,7 @@
 # group_vars/all.yml which is git-ignored.
 
 # ── Repository ────────────────────────────────────────────────────────────────
-app_repo: https://github.com/DungxND/banking-demo.git
+app_repo: https://github.com/DungxND/banking-demo-revamp.git
 app_repo_version: golang          # branch, tag, or SHA to deploy
 
 # ── k3s ───────────────────────────────────────────────────────────────────────

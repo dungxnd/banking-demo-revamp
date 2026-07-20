@@ -33,7 +33,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/dungxnd/banking-demo
+  IMAGE_PREFIX: ghcr.io/dungxnd/banking-demo-revamp
 
 jobs:
   # ── 1. Resolve tag + which services changed ─────────────────────────────────

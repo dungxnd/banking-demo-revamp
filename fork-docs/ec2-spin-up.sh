@@ -5,7 +5,7 @@
 #   1. Install k3s (Kubernetes + containerd, runs as a systemd service on the host)
 #   2. Install helm
 #   3. Clone the repo (instana branch) into ~/banking-demo (owned by the login user)
-#   4. Pull pre-built images from ghcr.io/dungxnd/banking-demo (CI-built)
+#   4. Pull pre-built images from ghcr.io/dungxnd/banking-demo-revamp (CI-built)
 #   5. Deploy via Helm
 #   6. Install Instana host agent
 #   7. Print access URLs
@@ -18,7 +18,7 @@
 # After first boot, SSH in as the login user — no sudo needed for kubectl/helm/git.
 set -euo pipefail
 
-REPO_URL="https://github.com/dungxnd/banking-demo.git"
+REPO_URL="https://github.com/dungxnd/banking-demo-revamp.git"
 
 # Resolve latest Helm version at runtime — no hardcoded version to go stale.
 # k3s ships its own kubectl so we don't need to resolve that separately.
@@ -76,9 +76,9 @@ curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
 sudo -u "$LOGIN_USER" git clone --branch golang "$REPO_URL" "$REPO_DIR"
 
 # ── 5. Pull pre-built images from GHCR into k3s containerd ───────────────────
-# Images are built by CI and published to ghcr.io/dungxnd/banking-demo/<name>.
+# Images are built by CI and published to ghcr.io/dungxnd/banking-demo-revamp/<name>.
 # k3s containerd pulls them directly — no Docker needed.
-GHCR="ghcr.io/dungxnd/banking-demo"
+GHCR="ghcr.io/dungxnd/banking-demo-revamp"
 for svc in api-producer auth-service account-service transfer-service notification-service frontend; do
   k3s ctr images pull "${GHCR}/${svc}:latest"
 done
@@ -183,7 +183,7 @@ echo "  kubectl get pods -n banking"
 echo "  kubectl logs -n banking -l app=api-producer -f"
 echo ""
 echo "Update a single service to a new image:"
-echo "  sudo k3s ctr images pull ghcr.io/dungxnd/banking-demo/api-producer:latest"
+echo "  sudo k3s ctr images pull ghcr.io/dungxnd/banking-demo-revamp/api-producer:latest"
 echo "  kubectl rollout restart deployment/api-producer -n banking"
 echo ""
 echo "Instana agent (install manually with your key):"

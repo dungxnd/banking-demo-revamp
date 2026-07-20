@@ -49,7 +49,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/dungxnd/banking-demo
+  IMAGE_PREFIX: ghcr.io/dungxnd/banking-demo-revamp
   GO_VERSION: '1.23'
 
 jobs:
