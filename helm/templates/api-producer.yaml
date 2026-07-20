@@ -33,8 +33,12 @@ spec:
       {{- end }}
       initContainers:
         - name: wait-for-nats
-          image: busybox:1.38
-          command: ['sh', '-c', 'until nc -z nats 4222; do echo "waiting for nats"; sleep 2; done']
+          image: alpine:3.23
+          imagePullPolicy: IfNotPresent
+          command:
+            - 'sh'
+            - '-c'
+            - 'until nc -z nats 4222; do echo "waiting for nats"; sleep 2; done'
           resources:
             requests:
               cpu: "5m"

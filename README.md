@@ -1,8 +1,22 @@
 # Banking Demo
 
-> **Forked from** [kevinram164/banking-demo](https://github.com/kevinram164/banking-demo) — extended with Go microservices, OpenTelemetry tracing, Helm chart, Ansible/Terraform infra, and performance benchmarks.
+A full-stack banking application where users can **create an account, log in, check their balance, send money to other users, and receive real-time notifications** when a transfer arrives.
 
-A microservices banking application demonstrating an event-driven architecture: Kong API gateway → NATS RPC request/reply → Go consumer services, with a JetStream durable event bus for CQRS read-model projection. Includes a React 19 + Vite frontend, a full Helm chart for Kubernetes, and a Docker Compose stack for local development.
+The app has a web interface you open in a browser. Everything you do — logging in, viewing your balance, sending a transfer — happens instantly, and the recipient sees a live notification without refreshing the page.
+
+> **Forked from** [kevinram164/banking-demo](https://github.com/kevinram164/banking-demo) — extended with Go microservices, OpenTelemetry tracing, Helm/Kubernetes deployment, and Instana observability.
+
+---
+
+## What this project demonstrates
+
+- **API gateway pattern** — Kong routes all browser traffic. The frontend never talks directly to any service.
+- **Event-driven microservices** — services communicate via NATS message passing, not direct HTTP calls between services.
+- **Real-time notifications** — WebSocket push when a transfer lands, powered by Redis pub/sub.
+- **CQRS read model** — account balances are served from a Redis cache, kept in sync by a durable event stream (NATS JetStream), with PostgreSQL as the fallback.
+- **Production-ready observability** — structured JSON logs, Prometheus metrics on every service, OpenTelemetry distributed tracing, and Instana integration.
+
+---
 
 ## Architecture
 
@@ -55,144 +69,315 @@ flowchart TD
     Auth & Account & Transfer & Notify --> Redis
 ```
 
-**REST request flow:**
-1. Browser → nginx → Kong → `api-producer`
-2. `api-producer` maps the exact URL path to a full NATS action subject via `subjectFromPath()` (e.g. `/api/auth/login` → `banking.auth.login`), then calls `nc.RequestMsgWithContext` — NATS creates a temporary inbox reply subject automatically
-3. The target consumer's `nats/micro` endpoint processes the message and calls `req.Respond(data)`
-4. The reply is delivered directly to the waiting goroutine in `api-producer` and returned as the HTTP response
+**How a request flows:** every browser call goes through Kong. Kong forwards `/api/*` to `api-producer`, which translates the URL into a NATS message — the right service picks it up, does the work, and replies. The browser gets a normal HTTP response and never knows NATS is involved.
 
-**Transfer post-commit pipeline (after PostgreSQL commit):**
-1. Redis pipeline (single round-trip): `DEL user_cache:phone:{sender}`, `DEL user_cache:phone:{receiver}`, `HSET balance {senderID} {newBalance}`, `HSET balance {receiverID} {newBalance}`, `PUBLISH notify:{receiverID}`
-2. JetStream publish: `banking.events.transfer.completed` with `Nats-Msg-Id: {transferID}` — server deduplicates retries within 5-minute window
-
-**Balance read model:**
-- `account-service` serves balance from the Redis `balance` hash (written by the post-commit pipeline above)
-- On cache miss (cold start, Redis restart): falls back to PostgreSQL and warms the hash
-- JetStream pull consumer (`account-service-balance`, `DeliverAllPolicy`): replays the full event log after a Redis wipe — no DB round-trip needed
-
-**WebSocket flow:** Browser → Kong → `notification-service` directly (bypasses NATS entirely). Real-time transfer events arrive via Redis pub/sub subscription.
+The WebSocket path (`/ws`) is the exception: Kong routes it directly to `notification-service`, which subscribes to Redis for live transfer events and pushes them to the open socket.
 
 ---
 
-## Granular architecture — request lifecycle & internal wiring
+## Services at a glance
 
-```mermaid
-flowchart LR
-    Browser(["🌐 Browser"])
+| Service | What it does | Port |
+|---|---|---|
+| `frontend` | React 19 + Vite SPA, served by nginx | 80 |
+| `kong` | API gateway — routes, CORS, rate limiting, tracing | 8000 |
+| `api-producer` | Translates HTTP requests into NATS messages | 8080 |
+| `auth-service` | Register, login, session management | 8001 |
+| `account-service` | Balance, profile, admin queries | 8002 |
+| `transfer-service` | Send money between accounts | 8003 |
+| `notification-service` | Notification history + live WebSocket push | 8004 |
+| `postgres` | Primary database (users, transfers, notifications) | 5432 |
+| `redis` | Sessions, balance cache, real-time pub/sub | 6379 |
+| `nats` | Message bus (request/reply + durable event stream) | 4222 |
 
-    subgraph FE["nginx :80"]
-        SPA["React SPA"]
-    end
+---
 
-    subgraph GW["Kong 3.9  :8000"]
-        route_api["/api/* → api-producer"]
-        route_ws["/ws   → notification-service"]
-        cors["CORS plugin"]
-    end
+## Run locally with Docker Compose
 
-    subgraph PROD["api-producer  :8080"]
-        chi["chi router"]
-        pTS["subjectFromPath()\nexact-match switch"]
-        rpc["rpcClient.call()\nnc.RequestMsgWithContext()\nNats-Trace-Dest header (1% sampled)"]
-        inbox["← _INBOX reply\n(NATS ephemeral)"]
-    end
+**Requirements:** Docker Desktop (or Docker Engine + Compose plugin)
 
-    subgraph NATS_BUS["NATS 2 + JetStream  :4222"]
-        s_auth["banking.auth.login\nbanking.auth.register"]
-        s_acct["banking.account.balance\nbanking.account.me\nbanking.account.lookup …"]
-        s_xfer["banking.transfer.transfer"]
-        s_ntfy["banking.notification.notifications"]
-        s_evt["banking.events.transfer.completed\n(JetStream BANKING_EVENTS stream)"]
-    end
-
-    subgraph INT["internal/ shared library"]
-        mw["nats.RequireSession\nnats.RequireAdmin\n(middleware chain)"]
-        micro["nats/micro service framework\n$SRV.PING · $SRV.STATS · $SRV.INFO"]
-        metrics_pkg["metrics.ConsumerMetrics\nnats_messages_total\nnats_handler_duration_seconds"]
-        tracing_pkg["tracing.NewProvider()\nOTel OTLP/gRPC"]
-        redis_pkg["redis.Session\nredis.UserCache (phone+username)\nredis.GetBalance / SetBalance\nredis.PublishTransferCompleted\nredis.SubscribeNotify"]
-        db_pkg["db.SerializableTx\nbob.DB query builder\npgx v5 pool"]
-        log_pkg["logging.MaskPhone\nlogging.MaskAccount\nlogging.MaskAmount (HMAC)"]
-        js_pkg["nats.InitStream\nnats.PublishTransferEvent\nnats.NewBalanceConsumer"]
-    end
-
-    subgraph AUTH["auth-service  :8001"]
-        h_reg["register\nbcrypt hash → INSERT users"]
-        h_login["login\nVerifyPassword\nSET session:{sid}\ncache → user_cache:phone + username"]
-    end
-
-    subgraph ACCT["account-service  :8002"]
-        h_me["me / lookup\n(RequireSession)"]
-        h_bal["balance\nRedis HGet → DB fallback\n+ SetBalance warm-up"]
-        h_admin["stats / users / transfers\n(RequireAdmin)"]
-        js_cons["balance projection goroutine\nJetStream pull consumer\nDeliverAllPolicy"]
-    end
-
-    subgraph XFER["transfer-service  :8003"]
-        h_tx["transfer\nSERIALIZABLE TX\nSELECT FOR UPDATE (ordered)\ndebit + credit + rows + notify"]
-        pipe["Tier 2: Redis pipeline\nDEL user_cache + HSET balance + PUBLISH"]
-        js_pub["Tier 3: JetStream publish\nNats-Msg-Id = transferID"]
-    end
-
-    subgraph NTFY["notification-service  :8004"]
-        h_list["notifications action\n(RequireSession)"]
-        ws_srv["WebSocket /ws\nsession via query param\nheartbeat → presence:{uid}"]
-        sub["SubscribeNotify(userID)\n→ push to WS client"]
-    end
-
-    PG[("PostgreSQL 18")]
-    Redis[("Redis 8")]
-
-    Browser --> SPA
-    Browser -->|"/api/*"| GW
-    Browser -->|"/ws"| GW
-    GW --> route_api & route_ws
-    route_api --> chi
-    route_ws --> ws_srv
-
-    chi --> pTS --> rpc
-    rpc -->|"NATS msg + headers\n{x-session, x-admin-secret}"| NATS_BUS
-    NATS_BUS -->|"msg.Respond → _INBOX"| inbox
-    inbox -->|"rpcResponse{status,body}"| rpc
-
-    s_auth --> mw --> AUTH
-    s_acct --> mw --> ACCT
-    s_xfer --> mw --> XFER
-    s_ntfy --> mw --> NTFY
-
-    NATS_BUS --- s_auth & s_acct & s_xfer & s_ntfy
-    s_evt --- js_cons
-
-    h_tx --> pipe --> redis_pkg
-    h_tx --> js_pub --> s_evt
-    js_cons --> redis_pkg
-
-    AUTH --> db_pkg --> PG
-    ACCT --> db_pkg
-    XFER --> db_pkg
-    NTFY --> db_pkg
-
-    h_login --> redis_pkg
-    h_me & h_bal & h_admin --> redis_pkg
-    ws_srv --> sub --> redis_pkg
-    redis_pkg --> Redis
-
-    AUTH & ACCT & XFER & NTFY --> metrics_pkg & micro
-    AUTH & ACCT & XFER & NTFY --> tracing_pkg
-    AUTH & ACCT & XFER & NTFY --> log_pkg
-    XFER & ACCT --> js_pkg
+```bash
+git clone https://github.com/dungxnd/banking-demo-revamp
+cd banking-demo-revamp
+docker compose up --build
 ```
 
-**Redis key-space at a glance:**
+That's it. All services start together. Demo accounts are seeded automatically on first boot.
 
-| Key | Written by | Read by | Purpose |
-|-----|-----------|---------|---------|
-| `session:{sid}` | auth-service (login) | all services via `RequireSession` | Session token → user ID |
-| `user_cache:phone:{phone}` | auth-service | auth-service | Login fast-path; DEL'd on transfer commit |
-| `user_cache:username:{username}` | auth-service | auth-service | Login fast-path; DEL'd on transfer commit |
-| `balance` (Hash) | transfer-service (post-commit) · account-service (warm-up) | account-service | Balance read model — HGet O(1) per request |
-| `presence:{userID}` | notification-service (WS heartbeat) | — | Online status; TTL = `PRESENCE_TTL_SECONDS` |
-| `notify:{userID}` | transfer-service (post-commit pub) | notification-service (sub) | Real-time transfer push to open WebSocket |
+| What | URL |
+|---|---|
+| App | http://localhost:3000 |
+| Kong proxy (direct API access) | http://localhost:8000 |
+| NATS monitoring dashboard | http://localhost:8222 |
+| NATS Prometheus metrics | http://localhost:7777/metrics |
+
+To stop everything: `docker compose down`
+To wipe the database and start fresh: `docker compose down -v && docker compose up --build`
+
+### Frontend only (without Docker)
+
+If you want to work on just the UI and already have the backend running elsewhere:
+
+```bash
+cd frontend
+npm install
+npm run dev   # opens at http://localhost:5173
+```
+
+Update the proxy target in `vite.config.js` to point at your Kong instance.
+
+---
+
+## Deploy to Kubernetes with Helm
+
+### What you need before starting
+
+- **A Kubernetes cluster** — the chart is designed for k3s (e.g. a single EC2 instance). It also works on k3d, minikube, EKS, and GKE.
+- **`local-path` StorageClass** — used for Postgres and Redis volumes. k3s includes this by default. For other clusters, install [local-path-provisioner](https://github.com/rancher/local-path-provisioner).
+- **`kubectl`** configured to talk to your cluster (`kubectl get nodes` should work)
+- **`helm` ≥ 3.12** — check with `helm version`
+
+The container images are public on `ghcr.io/dungxnd/banking-demo-revamp` — no registry credentials needed.
+
+### Deploy
+
+The chart sets up everything: namespaced secrets, NATS, Postgres, Redis, Kong, and all services.
+
+```bash
+# From the repo root
+helm upgrade --install banking ./helm \
+  --namespace banking --create-namespace \
+  --wait --timeout 300s
+```
+
+Kong binds directly to **port 80 on the node** — no Ingress or cloud load balancer required on k3s/EC2. Once deployed, the app is available at `http://<your-node-ip>/`.
+
+> **Helm 4 users:** `--atomic` is now `--rollback-on-failure`. Fresh installs default to Server-Side Apply. If you installed with Helm 3 and are upgrading, add `--server-side=false`.
+
+### Check that everything started
+
+```bash
+# All pods should show Running or Completed within about 60 seconds
+kubectl get pods -n banking
+
+# Send a test request
+curl -s http://<node-ip>/api/health
+
+# Consumers print this when they've connected to NATS and are ready
+kubectl logs -n banking -l app=auth-service --tail=5 | grep nats_micro_service_started
+```
+
+### Tear down
+
+```bash
+# Remove the release (keeps data volumes)
+helm uninstall banking -n banking
+
+# Remove everything including data volumes and stuck pods
+./helm/nuke.sh
+
+# Remove everything AND reinstall from scratch
+./helm/nuke.sh --reinstall
+```
+
+> **Warning:** `nuke.sh` deletes all PersistentVolumeClaims — database and Redis data is gone permanently.
+
+### Deploy a new image version
+
+Service names with hyphens must be quoted when passed to `--set`:
+
+```bash
+helm upgrade banking ./helm -n banking --reuse-values \
+  --set 'auth-service.image.tag=sha-abc1234' \
+  --set 'account-service.image.tag=sha-abc1234' \
+  --set 'transfer-service.image.tag=sha-abc1234' \
+  --set 'notification-service.image.tag=sha-abc1234' \
+  --set 'api-producer.image.tag=sha-abc1234' \
+  --set frontend.image.tag=sha-abc1234
+```
+
+### Optional: Ingress for cloud clusters (EKS / GKE)
+
+On bare-metal/k3s, Kong serves on port 80 directly via `hostPort` — no Ingress needed.
+For cloud clusters with a domain name, enable the Ingress resource:
+
+```bash
+helm upgrade banking ./helm -n banking --reuse-values \
+  --set ingress.enabled=true \
+  --set ingress.className=nginx \
+  --set ingress.host=banking.example.com \
+  --set kong.service.type=LoadBalancer \
+  --set kong.service.hostPort=null
+```
+
+| Cluster type | `ingress.className` |
+|---|---|
+| k3s (default target) | `traefik` |
+| minikube | `nginx` |
+| HAProxy Ingress | `haproxy` |
+
+### Optional: Disable JetStream
+
+JetStream (NATS durable event stream) is on by default and creates a 1 Gi volume for the event log. All services degrade gracefully without it. To disable:
+
+```bash
+helm upgrade banking ./helm -n banking --reuse-values \
+  --set nats.jetstream.enabled=false
+```
+
+### Optional: Run database migrations via Helm
+
+The chart includes a migration job that runs at upgrade time (disabled by default):
+
+```bash
+helm upgrade banking ./helm -n banking --reuse-values \
+  --set dbMigration.enabled=true
+```
+
+To run migrations manually instead:
+
+```bash
+kubectl exec -it -n banking deploy/postgres -- \
+  psql -U banking banking -f /migrations/<file>.sql
+```
+
+---
+
+## Observability
+
+### Logs
+
+All services emit structured JSON logs (one JSON object per line). Useful commands:
+
+```bash
+# Watch all ERROR-level events in real time
+kubectl logs -n banking --all-containers=true -f | grep '"level":"ERROR"'
+
+# Follow completed transfers
+kubectl logs -n banking -l app=transfer-service -f | grep '"msg":"transfer_success"'
+
+# Follow balance cache updates
+kubectl logs -n banking -l app=account-service -f | grep '"msg":"balance_projection_updated"'
+```
+
+### Prometheus metrics
+
+Every service exposes a `/metrics` endpoint. Scrape them with Prometheus or check manually:
+
+```bash
+kubectl port-forward -n banking svc/auth-service 8001:8001
+curl http://localhost:8001/metrics
+```
+
+Key metrics emitted by all consumer services:
+
+| Metric | What it measures |
+|---|---|
+| `nats_messages_total` | Requests processed, labeled by action and outcome |
+| `nats_handler_duration_seconds` | Time spent handling each message type |
+| `nats_reconnects_total` | How often a service had to reconnect to NATS |
+
+### OpenTelemetry tracing
+
+Distributed traces are enabled automatically when an Instana agent (or any OTel-compatible collector) is running on the node. Each service Deployment already contains:
+
+```yaml
+- name: NODE_IP
+  valueFrom:
+    fieldRef:
+      fieldPath: status.hostIP
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: "http://$(NODE_IP):4317"
+```
+
+Traces start flowing as soon as the agent is present — no extra configuration needed.
+To point at a different collector (e.g. a standalone OpenTelemetry Collector):
+
+```bash
+helm upgrade banking ./helm -n banking --reuse-values \
+  --set 'api-producer.extraEnv.OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability:4317' \
+  --set 'auth-service.extraEnv.OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability:4317'
+```
+
+### NATS service health
+
+The `nats/micro` framework provides built-in observability for all consumer services:
+
+```bash
+# Are all services up?
+nats micro ping
+
+# How many requests has each service handled?
+nats micro stats auth-service
+nats micro stats account-service
+nats micro stats transfer-service
+nats micro stats notification-service
+```
+
+---
+
+## Common operations
+
+```bash
+# Restart a service after a config change
+kubectl rollout restart deployment/auth-service -n banking
+
+# Scale a service (NATS queue groups handle load balancing automatically)
+kubectl scale deployment/transfer-service --replicas=3 -n banking
+
+# Open a database shell
+kubectl exec -it -n banking deploy/postgres -- psql -U banking banking
+
+# Inspect NATS internals
+kubectl port-forward -n banking svc/nats 8222:8222
+curl http://localhost:8222/varz    # server info
+curl http://localhost:8222/jsz     # JetStream streams and consumers
+
+# Check the JetStream event stream
+nats stream info BANKING_EVENTS
+nats consumer info BANKING_EVENTS account-service-balance
+```
+
+---
+
+## API endpoints
+
+`api-producer` maps URL paths to NATS subjects. Unknown paths return `404` immediately — no NATS round-trip.
+
+| HTTP method + path | Service | What it does |
+|---|---|---|
+| `POST /api/auth/register` | auth-service | Create a new account |
+| `POST /api/auth/login` | auth-service | Log in, receive a session token |
+| `GET /api/account/me` | account-service | Current user's profile |
+| `GET /api/account/balance` | account-service | Current balance |
+| `GET /api/account/lookup` | account-service | Look up another user |
+| `GET /api/account/stats` | account-service | Admin: system stats |
+| `GET /api/account/users` | account-service | Admin: all users |
+| `GET /api/account/transfers` | account-service | Admin: all transfers |
+| `GET /api/account/notifications` | account-service | Admin: all notifications |
+| `GET /api/account/user-detail` | account-service | Admin: user detail |
+| `POST /api/transfer/transfer` | transfer-service | Send money |
+| `GET /api/notifications/notifications` | notification-service | Notification history |
+| `GET /ws` | notification-service | WebSocket — live transfer events |
+
+---
+
+## Environment variables
+
+These variables are injected from the Helm-managed secret. Override them in `helm/values.yaml` or via `--set`.
+
+| Variable | Default | Used by |
+|---|---|---|
+| `DATABASE_URL` | `postgres://banking:bankingpass@postgres:5432/banking` | auth, account, transfer, notification |
+| `REDIS_URL` | `redis://redis:6379` | auth, account, transfer, notification |
+| `NATS_URL` | `nats://nats:4222` | api-producer + all consumers |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | set from node IP at pod start | all services |
+| `DB_POOL_SIZE` | `15` | all consumers |
+| `SESSION_TTL_SECONDS` | `86400` (24 h) | auth, account, transfer, notification |
+| `USER_CACHE_TTL_SECONDS` | `300` (5 min) | auth |
+| `PRESENCE_TTL_SECONDS` | `60` | notification |
+| `LOG_AMOUNT_SECRET` | _(built-in default key)_ | transfer, account |
+| `NATS_TRACE_SAMPLE_RATE` | `0.01` (1%) | api-producer |
 
 ---
 
@@ -200,110 +385,48 @@ flowchart LR
 
 ```
 .
-├── go.work                  # Go workspace — links all modules
-├── internal/                # Shared Go library (all services import this)
-│   ├── nats/                # Consumer framework (nats/micro), JetStream helpers, middleware
-│   ├── auth/                # bcrypt hash + verify
-│   ├── db/                  # pgx pool, bob.DB adapter, typed row structs, query helpers
-│   ├── health/              # HTTP + NATS readiness handlers
-│   ├── logging/             # slog JSON logger, MaskPhone/Account/Amount helpers
-│   ├── metrics/             # Prometheus helpers + ConsumerMetrics
-│   ├── redis/               # Session, user cache, balance read model, presence, pub/sub
-│   └── tracing/             # OpenTelemetry provider init
+├── go.work                  # Go workspace — links all service modules
+├── internal/                # Shared Go library imported by all services
+│   ├── nats/                #   NATS consumer framework, JetStream helpers, middleware
+│   ├── auth/                #   bcrypt helpers
+│   ├── db/                  #   PostgreSQL pool, query builder, typed row structs
+│   ├── health/              #   HTTP + NATS readiness handlers
+│   ├── logging/             #   JSON logger, data masking (phone, account, amount)
+│   ├── metrics/             #   Prometheus helpers
+│   ├── redis/               #   Session, balance cache, presence, pub/sub
+│   └── tracing/             #   OpenTelemetry provider initialisation
 │
-├── producer/                # api-producer: stateless HTTP → NATS RPC proxy         (:8080)
+├── producer/                # api-producer — HTTP → NATS bridge              (:8080)
 │
 ├── services/
-│   ├── auth-service/        # register, login                                        (:8001)
-│   ├── account-service/     # me, balance, lookup, admin/*, balance projection       (:8002)
-│   ├── transfer-service/    # initiate transfer + JS event publish                  (:8003)
-│   └── notification-service/# GET /notifications, WebSocket /ws                     (:8004)
+│   ├── auth-service/        # register, login                                (:8001)
+│   ├── account-service/     # balance, profile, admin, balance projection    (:8002)
+│   ├── transfer-service/    # send money + JetStream event publish           (:8003)
+│   └── notification-service/# notification history + WebSocket               (:8004)
 │
-├── migrations/              # golang-migrate SQL files (source of truth for schema)
+├── migrations/              # SQL migration files (golang-migrate)
 │
 ├── frontend/                # React 19 + Vite + Tailwind CSS v4 SPA
 │   ├── src/
-│   ├── vite.config.js
-│   ├── Dockerfile           # multi-stage: node build → nginx:alpine serve
-│   └── nginx.conf           # SPA fallback + /api/* and /ws proxy to Kong
+│   ├── Dockerfile           #   multi-stage build: Node → nginx:alpine
+│   └── nginx.conf           #   SPA fallback + /api/* and /ws proxy to Kong
 │
-├── helm/                    # Umbrella Helm chart — deploys the full stack
+├── helm/                    # Helm chart — deploys the complete stack to Kubernetes
 │   ├── Chart.yaml
-│   ├── values.yaml
-│   ├── charts/
+│   ├── values.yaml          #   edit this to change images, credentials, resources
 │   └── templates/
 │
-├── monitoring/              # Kubernetes manifests: Prometheus, Grafana, Jaeger, OTel collector
-├── kong-ha/                 # Kong DB-mode config import job (HA deployments)
-├── instana/                 # Instana agent configs, synthetic tests, runbooks
-├── fork-docs/               # Migration plans and architecture notes
-│
-├── docker-compose.yml       # Local dev: full stack in one command (NATS with JetStream)
-└── kong-compose.yml         # Kong DB-less declarative config (mounted by Compose)
+├── monitoring/              # Kubernetes manifests for Prometheus, Grafana, Jaeger
+├── instana/                 # Instana agent config, synthetic tests, runbooks
+├── docker-compose.yml       # Local dev stack
+└── kong-compose.yml         # Kong declarative config for Compose
 ```
 
 ---
 
-## Tech stack
+## Building images yourself
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 19, Vite, Tailwind CSS v4 |
-| API Gateway | Kong 3.9 (DB-less in Compose; DB-mode in k8s HA) |
-| HTTP entry | Go + chi (`api-producer`) |
-| Message bus | NATS 2 — `nats/micro` service framework; request/reply via inbox subjects |
-| Durable event bus | NATS JetStream — `BANKING_EVENTS` stream; pull consumer for balance projection |
-| Session / cache / WS notify | Redis 8 |
-| Consumer services | Go 1.26 |
-| Database | PostgreSQL 18 |
-| DB layer | `stephenafamo/bob` — composable query builder + codegen |
-| Schema migrations | `golang-migrate` SQL files |
-| Auth | bcrypt (`golang.org/x/crypto`) |
-| Observability | OpenTelemetry OTLP/gRPC, Prometheus `/metrics`, `nats/micro` `$SRV.STATS`, Instana |
-| Packaging | Helm (Helm 4 compatible) |
-| CI | GitHub Actions — GHCR image build + k8s deploy |
-
----
-
-## Quick start — Docker Compose
-
-```bash
-git clone https://github.com/dungxnd/banking-demo
-cd banking-demo
-docker compose up --build
-```
-
-| Service | URL |
-|---------|-----|
-| App (frontend) | http://localhost:3000 |
-| Kong proxy | http://localhost:8000 |
-| NATS monitoring | http://localhost:8222 — `/healthz` `/varz` `/connz` `/jsz` |
-| NATS metrics (exporter) | http://localhost:7777/metrics |
-| PostgreSQL | localhost:5432 |
-
-Demo credentials are seeded automatically on first boot.
-
-JetStream is enabled in the Compose stack (`-js` flag). To run without it (Core NATS only), remove `-js` from the NATS `command` in `docker-compose.yml` — all services degrade gracefully.
-
-> The frontend container proxies `/api/*` and `/ws` to Kong at `http://kong:8000`, so all API traffic flows through Kong even in Compose.
-
----
-
-## Frontend dev server (without Docker)
-
-```bash
-cd frontend
-npm install
-npm run dev   # Vite dev server on http://localhost:5173
-```
-
-Point `vite.config.js` proxy target at your Kong instance, or run `docker compose up` for the backend and connect from there.
-
----
-
-## Building and pushing images
-
-Each service has its own Dockerfile. Build from the repo root:
+The CI pipeline builds and pushes images automatically on every commit. To build manually:
 
 ```bash
 REGISTRY=ghcr.io/your-org/banking-demo
@@ -316,231 +439,37 @@ docker build -f services/notification-service/Dockerfile -t $REGISTRY/notificati
 docker build -f frontend/Dockerfile frontend/            -t $REGISTRY/frontend:latest
 ```
 
-CI builds and pushes automatically on every push via `.github/workflows/docker-build.yml`.
+Then update `image.repository` and `image.tag` in `helm/values.yaml` before deploying.
 
 ---
 
-## Kubernetes deployment (Helm)
+## Tech stack
 
-### Prerequisites
-
-- Kubernetes cluster (k3d, minikube, EKS, EC2 k3s)
-- `kubectl` configured for the target cluster
-- `helm` ≥ 3.12
-- Images pushed to a registry accessible from the cluster
-
-### Create the NATS secret
-
-```bash
-kubectl create secret generic nats-connection-secret \
-  --namespace banking \
-  --from-literal=NATS_URL=nats://nats:4222
-```
-
-### Deploy
-
-```bash
-helm upgrade --install banking-demo ./helm \
-  --namespace banking --create-namespace \
-  --set global.imageRegistry=ghcr.io/your-org/banking-demo \
-  --set ingress.host=banking.example.com
-```
-
-JetStream is enabled by default in `helm/charts/nats/values.yaml` (`nats.jetstream.enabled: true`). A 1 Gi `PersistentVolumeClaim` is created for stream storage. To disable JetStream:
-
-```bash
-helm upgrade banking-demo ./helm -n banking --reuse-values \
-  --set nats.jetstream.enabled=false
-```
-
-Override image tags for a rolling deploy:
-
-```bash
-helm upgrade banking-demo ./helm -n banking --reuse-values \
-  --set auth-service.image.tag=sha-abc1234 \
-  --set account-service.image.tag=sha-abc1234 \
-  --set transfer-service.image.tag=sha-abc1234 \
-  --set notification-service.image.tag=sha-abc1234 \
-  --set api-producer.image.tag=sha-abc1234 \
-  --set frontend.image.tag=sha-abc1234
-```
-
-### Verify
-
-```bash
-kubectl get pods -n banking
-# All pods reach Running; consumers log `nats_micro_service_started` on success
-
-kubectl get ingress -n banking
-```
-
-### Ingress class
-
-| Cluster | `ingress.className` |
-|---------|---------------------|
-| k3d / k3s | `traefik` (default) |
-| minikube | `nginx` |
-| Production (HAProxy) | `haproxy` |
-
----
-
-## Environment variables
-
-All services share these variables. Each service also accepts its own (documented in its `README.md`).
-
-| Variable | Default | Used by |
-|----------|---------|---------|
-| `DATABASE_URL` | `postgresql://banking:bankingpass@postgres:5432/banking` | auth, account, transfer, notification |
-| `REDIS_URL` | `redis://redis:6379/0` | auth, account, transfer, notification |
-| `NATS_URL` | `nats://nats:4222` | api-producer + all consumers |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(unset — tracing disabled)_ | all — e.g. `http://otel-collector:4317` |
-| `DB_POOL_SIZE` | `15` | all consumers |
-| `SESSION_TTL_SECONDS` | `86400` (24 h) | auth, account, transfer, notification |
-| `USER_CACHE_TTL_SECONDS` | `300` (5 min) | auth |
-| `PRESENCE_TTL_SECONDS` | `60` | notification |
-| `LOG_AMOUNT_SECRET` | _(default key)_ | transfer, account |
-| `NATS_TRACE_SAMPLE_RATE` | `0.01` (1%) | api-producer — `Nats-Trace-Dest` header rate |
-
----
-
-## NATS subject routing
-
-`api-producer` maps each known URL path to a full NATS action subject (Phase 6b per-action routing):
-
-| HTTP path | NATS subject | Consumer |
-|-----------|-------------|---------|
-| `POST /api/auth/register` | `banking.auth.register` | auth-service |
-| `POST /api/auth/login` | `banking.auth.login` | auth-service |
-| `GET /api/account/me` | `banking.account.me` | account-service |
-| `GET /api/account/balance` | `banking.account.balance` | account-service |
-| `GET /api/account/lookup` | `banking.account.lookup` | account-service |
-| `GET /api/account/stats` | `banking.account.stats` | account-service (admin) |
-| `GET /api/account/users` | `banking.account.users` | account-service (admin) |
-| `GET /api/account/transfers` | `banking.account.transfers` | account-service (admin) |
-| `GET /api/account/notifications` | `banking.account.notifications` | account-service (admin) |
-| `GET /api/account/user-detail` | `banking.account.user-detail` | account-service (admin) |
-| `POST /api/transfer/transfer` | `banking.transfer.transfer` | transfer-service |
-| `GET /api/notifications/notifications` | `banking.notification.notifications` | notification-service |
-| `/ws` | — | notification-service (direct via Kong, no NATS) |
-
-Each consumer registers one `nats/micro` endpoint per action. Unknown paths return HTTP `404` immediately at the producer — no NATS round-trip.
-
-**JetStream event subject** (not RPC — no reply):
-
-| Subject | Publisher | Consumers |
-|---------|-----------|-----------|
-| `banking.events.transfer.completed` | transfer-service | account-service (balance projection) |
-
----
-
-## Observability
-
-### Structured JSON logs
-
-All services emit newline-delimited JSON via `log/slog`. Every line carries `"service"` and `"level"`.
-
-```bash
-# Watch for NATS reconnect events across all consumers
-kubectl logs -n banking --all-containers=true -f | grep '"msg":"nats_reconnected"'
-
-# Tail transfer completions
-kubectl logs -n banking -l app=transfer-service -f | grep '"msg":"transfer_success"'
-
-# Follow balance projection updates
-kubectl logs -n banking -l app=account-service -f | grep '"msg":"balance_projection_updated"'
-
-# Follow all ERROR-level events
-kubectl logs -n banking --all-containers=true -f | grep '"level":"ERROR"'
-```
-
-### Prometheus metrics
-
-Every service exposes `GET /metrics`. Consumer services automatically emit:
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `nats_messages_total` | Counter | Messages processed `{action, status, service}` |
-| `nats_handler_duration_seconds` | Histogram | Handler execution time `{action, service}` |
-| `nats_reconnects_total` | Counter | NATS reconnect events `{service}` |
-
-`nats-exporter` (`:7777/metrics`) additionally exposes NATS server stats. The `api-producer` exposes HTTP and RPC metrics — see [`producer/README.md`](producer/README.md).
-
-### nats/micro built-in observability
-
-Every consumer service registers with the `nats/micro` framework, which provides:
-
-```bash
-# List all running service instances
-nats micro ls
-
-# Per-action request counts, errors, average latency
-nats micro stats auth-service
-nats micro stats account-service
-nats micro stats transfer-service
-nats micro stats notification-service
-
-# Service descriptor + all endpoint subjects
-nats micro info account-service
-
-# Health ping (replaces the explicit health action)
-nats micro ping
-```
-
-### OpenTelemetry tracing
-
-Disabled by default. Enable by setting `OTEL_EXPORTER_OTLP_ENDPOINT`:
-
-```bash
-helm upgrade ... \
-  --set 'global.env.OTEL_EXPORTER_OTLP_ENDPOINT=http://instana-agent.instana-agent:4317'
-```
-
----
-
-## Common operations
-
-```bash
-# Restart a service after a config change
-kubectl rollout restart deployment/auth-service -n banking
-
-# Scale a consumer horizontally (nats/micro queue groups handle load balancing)
-kubectl scale deployment/transfer-service --replicas=3 -n banking
-
-# Inspect NATS server stats (including JetStream)
-kubectl port-forward -n banking svc/nats 8222:8222
-curl http://localhost:8222/varz    # server info
-curl http://localhost:8222/connz   # connected clients
-curl http://localhost:8222/jsz     # JetStream streams and consumers
-
-# Inspect JetStream stream directly
-nats stream info BANKING_EVENTS
-nats consumer info BANKING_EVENTS account-service-balance
-
-# Open psql on the in-cluster Postgres
-kubectl exec -it -n banking deploy/postgres -- psql -U banking banking
-
-# Run schema migrations
-docker run --rm \
-  -v $(pwd)/migrations:/migrations \
-  migrate/migrate \
-  -path=/migrations -database "$DATABASE_URL" up
-
-# Uninstall (keeps PVCs and namespace)
-helm uninstall banking-demo -n banking
-```
+| Layer | Technology |
+|---|---|
+| Frontend | React 19, Vite, Tailwind CSS v4 |
+| API gateway | Kong 3.9 (DB-less, declarative config) |
+| HTTP entry | Go + chi router (`api-producer`) |
+| Message bus | NATS 2 with `nats/micro` service framework |
+| Durable event bus | NATS JetStream (`BANKING_EVENTS` stream) |
+| Session / cache / WS push | Redis 8 |
+| Backend services | Go 1.26 |
+| Database | PostgreSQL 18 |
+| Query builder | `stephenafamo/bob` |
+| Schema migrations | `golang-migrate` SQL files |
+| Auth | bcrypt (`golang.org/x/crypto`) |
+| Observability | OpenTelemetry OTLP/gRPC, Prometheus, Instana |
+| Packaging | Helm (Helm 3 / Helm 4 compatible) |
+| CI | GitHub Actions — GHCR image build + Kubernetes deploy |
 
 ---
 
 ## Architecture deep-dive
 
-See [`ARCH-NATS-RPC.md`](ARCH-NATS-RPC.md) for the NATS request/reply architecture, `nats/micro` service framework, per-action subject hierarchy, RPC envelope format, JetStream event bus, and the rationale for choosing NATS over AMQP.
+For a deeper look at how everything fits together, see the supplementary docs:
 
-See [`MICROSERVICES.md`](MICROSERVICES.md) for per-service action tables, the shared `internal/` library, Kong routing, database schema, and Redis key space.
-
-See [`OBSERVABILITY.md`](OBSERVABILITY.md) for the full metrics reference, Prometheus queries, `nats/micro` stats, and the self-hosted monitoring stack setup.
-
-See [`fork-docs/golang-migration-plan.md`](fork-docs/golang-migration-plan.md) for the Go rewrite plan and library decisions.
-
-See [`fork-docs/cqrs-plan.md`](fork-docs/cqrs-plan.md) for the CQRS implementation (Tier 1b cache fix, Tier 2 balance read model, Tier 3 JetStream event bus) — all tiers implemented.
-
-See [`fork-docs/amqp-to-nats-migration.md`](fork-docs/amqp-to-nats-migration.md) for the full AMQP → NATS migration plan including Phase 6a/6b (`nats/micro` + per-action subjects) — all phases implemented.
+- [`ARCH-NATS-RPC.md`](ARCH-NATS-RPC.md) — NATS request/reply design, `nats/micro` service framework, per-action subject routing, JetStream event bus
+- [`MICROSERVICES.md`](MICROSERVICES.md) — per-service action tables, shared `internal/` library, Kong routing config, database schema, Redis key space
+- [`OBSERVABILITY.md`](OBSERVABILITY.md) — Prometheus query reference, `nats/micro` stats, self-hosted monitoring stack setup
+- [`fork-docs/cqrs-plan.md`](fork-docs/cqrs-plan.md) — CQRS implementation: Redis balance cache, JetStream event projection, PostgreSQL fallback
+- [`fork-docs/amqp-to-nats-migration.md`](fork-docs/amqp-to-nats-migration.md) — how the project migrated from AMQP to NATS, including `nats/micro` and per-action subjects

@@ -33,8 +33,12 @@ spec:
       {{- end }}
       initContainers:
         - name: wait-for-postgres
-          image: busybox:1.38
-          command: ['sh', '-c', 'until nc -z postgres 5432; do echo "waiting for postgres"; sleep 2; done']
+          image: alpine:3.23
+          imagePullPolicy: IfNotPresent
+          command:
+            - 'sh'
+            - '-c'
+            - 'until nc -z postgres 5432; do echo "waiting for postgres"; sleep 2; done'
           resources:
             requests:
               cpu: "5m"
@@ -43,8 +47,12 @@ spec:
               cpu: "50m"
               memory: "16Mi"
         - name: wait-for-nats
-          image: busybox:1.38
-          command: ['sh', '-c', 'until nc -z nats 4222; do echo "waiting for nats"; sleep 2; done']
+          image: alpine:3.23
+          imagePullPolicy: IfNotPresent
+          command:
+            - 'sh'
+            - '-c'
+            - 'until nc -z nats 4222; do echo "waiting for nats"; sleep 2; done'
           resources:
             requests:
               cpu: "5m"
