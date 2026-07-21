@@ -2,10 +2,10 @@ locals {
   name_prefix = "banking-demo-${var.environment}"
 
   # Ports exposed by the k3s + Helm stack on the EC2 node:
-  #   30080 — Kong NodePort (bound on every node)
-  #   6443  — k3s API server (kubectl / Helm access from your workstation)
+  #   80  — Caddy HTTP (hostNetwork, sole entry point)
+  #   443 — Caddy HTTPS (TLS termination via Let's Encrypt)
   app_ports = [
-    30080, # Kong NodePort
-    6443,  # k3s API server
+    80,
+    443,
   ]
 }

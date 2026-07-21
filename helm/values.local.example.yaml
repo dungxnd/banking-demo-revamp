@@ -1,0 +1,23 @@
+# values.local.example.yaml — TEMPLATE for values.local.yaml (gitignored)
+#
+# HOW TO USE:
+#   1. Copy this file to helm/values.local.yaml:
+#        cp helm/values.local.example.yaml helm/values.local.yaml
+#   2. Fill in your actual secrets below.
+#   3. Deploy with:
+#        helm upgrade --install banking ./helm -n banking --create-namespace \
+#          -f helm/values.yaml -f helm/values.local.yaml --wait
+#
+# The file helm/values.local.yaml is gitignored and NEVER committed.
+
+# ── Secrets ──────────────────────────────────────────────────
+secret:
+  postgresPassword: "CHANGE_ME_postgres_password"
+
+# ── Caddy ────────────────────────────────────────────────────
+caddy:
+  tls:
+    enabled: false                     # Set true to enable HTTPS (domain's A record must point to node IP)
+    domain: "bank.duckdns.org"        # Any domain with DNS A record → your node IP
+    # No token or plugin needed — Caddy uses HTTP-01 ACME challenge on port 80.
+    # DuckDNS token is only needed for dynamic IP updates (separate cron).

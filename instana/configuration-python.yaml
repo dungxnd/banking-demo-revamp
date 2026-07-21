@@ -72,7 +72,7 @@ com.instana.plugin.python:
 # ---------------------------------------------------------------------------
 # PostgreSQL monitoring
 # /final: user=banking, db=banking — same credentials as previous stack.
-# Service is headless ClusterIP (port 5432, no NodePort).
+# Service is headless ClusterIP (port 5432, no external exposure).
 # The host agent cannot reach it directly from the EC2 host; monitoring is
 # done via the Kubernetes in-process sensor (pod/container metrics) and
 # OTel traces from the services. Leave the block here for completeness;
@@ -92,7 +92,7 @@ com.instana.plugin.postgresql:
 # is enabled in kong values.yaml; Kong metrics reach Instana via OTel/OTLP
 # spans from the Python services that call Kong routes.
 #
-# To enable when Kong admin becomes reachable (e.g. via a debug NodePort):
+# To enable when Kong admin becomes reachable (e.g. via hostPort or port-forward):
 #   com.instana.plugin.kong:
 #     enabled: true
 #     dataset_size: 10
@@ -107,12 +107,12 @@ com.instana.plugin.postgresql:
 
 # ---------------------------------------------------------------------------
 # Redis monitoring
-# /final: Redis is a headless ClusterIP StatefulSet (port 6379, no NodePort).
+# /final: Redis is a headless ClusterIP StatefulSet (port 6379, no external exposure).
 # The host agent on the EC2 node cannot reach the Redis pod.
 # Client-side tracing (opentelemetry-instrumentation-redis) in the Python
 # services produces Redis spans that flow to Instana via OTLP.
 #
-# To enable when Redis is reachable (e.g. via a debug NodePort at 32002):
+# To enable when Redis is reachable (e.g. via hostPort or port-forward):
 #   com.instana.plugin.redis:
 #     username: ''
 #     password: ''

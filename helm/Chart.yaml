@@ -1,9 +1,9 @@
 apiVersion: v2
 name: banking-demo
-description: Banking Demo Golang — Kong → API Producer → NATS → Consumers
+description: Banking Demo — Caddy (edge) → Kong (ClusterIP) → API Producer → NATS → Consumers
 type: application
-version: 0.3.0
-appVersion: "9"
+version: 1.0.0
+appVersion: "10"
 keywords:
   - banking
   - microservices

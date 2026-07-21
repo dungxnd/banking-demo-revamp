@@ -1,0 +1,13 @@
+{{- if .Values.sharedEnv }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "banking-demo.sharedEnvConfigMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "banking-demo.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.sharedEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}

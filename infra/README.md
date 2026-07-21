@@ -75,7 +75,7 @@ This runs three roles in order:
 |---|---|
 | `common` | apt upgrade, base packages, 2 GiB swap, sysctl tuning |
 | `k3s` | Installs k3s (Traefik disabled) + Helm v4; copies kubeconfig for `ubuntu` user |
-| `app` | Clones the repo, runs `helm upgrade --install`, waits for Kong on port 30080 |
+| `app` | Clones the repo, runs `helm upgrade --install`, waits for Caddy on port 80 |
 
 ---
 
@@ -95,7 +95,7 @@ ansible-playbook site.yml --tags app
 | `aws_vpc` | VPC `10.0.0.0/16` with DNS enabled |
 | `aws_subnet` | Single public subnet `10.0.1.0/24` |
 | `aws_internet_gateway` + route table | Internet access for the instance |
-| `aws_security_group` | Inbound: SSH (22), Kong proxy hostPort (80), k3s API (6443) |
+| `aws_security_group` | Inbound: SSH (22), Caddy HTTP (80), Caddy HTTPS (443) |
 | `aws_instance` | Ubuntu 26.04 LTS, `t3a.medium`, 30 GiB gp3 encrypted root |
 | `aws_key_pair` | Registers your existing `~/.ssh/id_ed25519.pub` |
 

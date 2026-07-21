@@ -74,7 +74,7 @@ resource "aws_vpc_security_group_ingress_rule" "ssh" {
   tags = { Name = "${local.name_prefix}-ssh-${each.key}" }
 }
 
-# Application ports (Kong proxy 8000, Kong admin 8001, frontend 3000) —
+# Application ports (Caddy HTTP 80, Caddy HTTPS 443) —
 # one rule per port × CIDR combination.
 resource "aws_vpc_security_group_ingress_rule" "app" {
   for_each = {

@@ -1,16 +1,16 @@
 Banking Demo installed.
-Architecture: Kong → API Producer → NATS → Consumers (auth/account/transfer/notification)
+Architecture: Caddy (edge, hostNetwork) → Kong (ClusterIP) → API Producer → NATS → Consumers
 
 Release: {{ .Release.Name }}
 Namespace: {{ .Release.Namespace }}
 
 Deploy command:
-  helm upgrade --install banking-demo . -n banking --create-namespace \
-    --rollback-on-failure
+  helm upgrade --install {{ .Release.Name }} . \
+    -n {{ .Release.Namespace }} --create-namespace \
+    -f values.yaml -f values.local.yaml --wait
 
-HELM 4 NOTES:
-  - --atomic renamed to --rollback-on-failure; --force renamed to --force-replace.
-  - Fresh installs default to Server-Side Apply (SSA). Add --server-side=false to keep
-    client-side apply (e.g. when upgrading a release originally installed with Helm 3).
-
-Ingress host: {{ .Values.ingress.host | default "localhost" }}
+{{ if .Values.caddy.tls.enabled }}
+TLS domain: {{ .Values.caddy.tls.domain }}
+{{ else }}
+No TLS configured — HTTP-only mode (access via http://<node-ip>).
+{{ end }}

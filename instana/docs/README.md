@@ -28,9 +28,9 @@ Reference for Instana observability on the banking-demo k3s stack. Condensed fro
 | [`01-agent-install.md`](./01-agent-install.md) | *(Legacy)* Host agent on Ubuntu EC2 — one-liner install, directory layout, kubeconfig setup |
 | [`02-kubernetes-monitoring.md`](./02-kubernetes-monitoring.md) | k8s sensor discovery, OTLP pod-to-agent flow, Traefik HelmChartConfig |
 | [`03-opentelemetry.md`](./03-opentelemetry.md) | OTel OTLP ingestion. Go instrumentation, pod env vars, NATS trace propagation, OTel vs go-sensor |
-| [`04-kong-sensor.md`](./04-kong-sensor.md) | Kong sensor — NodePort prerequisite, `configuration.yaml` block, metrics |
+| [`04-kong-sensor.md`](./04-kong-sensor.md) | Kong sensor — ClusterIP prerequisite, `configuration.yaml` block, metrics |
 | [`05-traefik-sensor.md`](./05-traefik-sensor.md) | Traefik v3 OTLP tracing — HelmChartConfig, Prometheus metrics, troubleshooting |
-| [`06-redis-sensor.md`](./06-redis-sensor.md) | Redis sensor — NodePort config, ACL requirements, metrics, `instaredis` native spans |
+| [`06-redis-sensor.md`](./06-redis-sensor.md) | Redis sensor — ClusterIP access, ACL requirements, metrics, `instaredis` native spans |
 | [`07-postgresql-sensor.md`](./07-postgresql-sensor.md) | PostgreSQL sensor — stats tracking, agent config, metrics, `instapgx` native spans |
 | [`08-synthetic-monitoring.md`](./08-synthetic-monitoring.md) | API Script synthetic tests — creating tests, variables, Smart Alerts, PoP selection |
 | [`09-pod-service-detection.md`](./09-pod-service-detection.md) | **⚠️ Services show 0 calls.** Infrastructure vs Application detection, OTLP checklist, AP setup, Concert correlation |

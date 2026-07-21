@@ -178,7 +178,8 @@ spec:
           configMap:
             name: {{ include "banking-demo.kong.configMapName" . }}
 ---
-# Kong Service — NodePort for external access on every node.
+# Kong Service — ClusterIP (Caddy is the edge proxy on :80/:443 via hostNetwork).
+# No NodePort — only internal cluster access.
 apiVersion: v1
 kind: Service
 metadata:
@@ -195,9 +196,6 @@ spec:
     - name: {{ .Values.kong.proxyPortName }}
       port: {{ .Values.kong.proxyPort }}
       targetPort: {{ .Values.kong.proxyPort }}
-      {{- if .Values.kong.service.nodePort }}
-      nodePort: {{ .Values.kong.service.nodePort }}
-      {{- end }}
     # Admin port — exposed only within the cluster (ClusterIP).
     # Required for the Instana Kong sensor to poll admin API metrics.
     # KONG_ADMIN_LISTEN must be 0.0.0.0:8001 (not 127.0.0.1) for this to work.

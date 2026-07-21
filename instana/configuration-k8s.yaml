@@ -84,8 +84,8 @@ com.instana.plugin.postgresql:
 # ---------------------------------------------------------------------------
 # Kong API Gateway monitoring
 # Remote mode — agent is on the host, Kong admin is inside the cluster.
-# Kong admin is exposed via NodePort 32001 so the host agent reaches it
-# via localhost (no k8s DNS resolution needed from the host).
+# Kong admin is ClusterIP (not NodePort). The host agent can reach it
+# via kubectl port-forward or hostPort on the Kong pod.
 # No auth — Kong runs in DB-less mode with no RBAC.
 # Prometheus plugin must be enabled in kong-configmap.yaml (it is).
 # poll_rate minimum is 30s per Instana docs.
@@ -107,8 +107,8 @@ com.instana.plugin.kong:
 # No password — banking-demo Redis runs without auth (default config).
 # poll_rate: 10s is sufficient for a demo; drop to 1 for high-fidelity metrics.
 # CONFIG command must not be disabled or renamed on the Redis side.
-# Redis is exposed via NodePort 32002 so the host agent reaches it via
-# localhost (no k8s DNS resolution needed from the host, no hardcoded pod IP).
+# Redis is ClusterIP (not NodePort) — host agent can reach it via
+# kubectl port-forward or hostPort on the Redis pod.
 # ---------------------------------------------------------------------------
 com.instana.plugin.redis:
   username: ''

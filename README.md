@@ -24,11 +24,15 @@ The app has a web interface you open in a browser. Everything you do — logging
 flowchart TD
     Browser["🌐 Browser"]
 
+    subgraph Edge["Edge Proxy  (Caddy :80/:443, hostNetwork)"]
+        Caddy["Caddy 2.11\nTLS termination · HTTP→HTTPS redirect\nreverse proxy → Kong"]
+    end
+
     subgraph Frontend["Frontend  (nginx :80)"]
         FE["React 19 + Vite SPA"]
     end
 
-    subgraph Gateway["API Gateway  (Kong 3.9 :8000)"]
+    subgraph Gateway["API Gateway  (Kong 3.9 :8000, ClusterIP)"]
         Kong["Kong\nDB-less declarative config\nCORS plugin on all routes"]
     end
 
@@ -53,10 +57,11 @@ flowchart TD
         Redis[("Redis 8\nsession · user_cache · balance hash\npresence · notify pub/sub")]
     end
 
-    Browser -->|"GET /"| Frontend
-    Browser -->|"POST /api/*"| Kong
-    Browser -->|"GET /ws"| Kong
-    Frontend -->|"proxies /api/* + /ws"| Kong
+    Browser -->|":80 / :443"| Caddy
+    Caddy -->|"reverse_proxy → ClusterIP"| Kong
+    Caddy -->|"reverse_proxy → ClusterIP"| Frontend
+    Browser -->|"POST /api/*"| Caddy
+    Browser -->|"GET /ws"| Caddy
     Kong -->|"/api/* → strip_path:false"| Producer
     Kong -->|"/ws direct route"| Notify
     Producer -->|"NATS RPC {payload}"| NATS
@@ -69,9 +74,7 @@ flowchart TD
     Auth & Account & Transfer & Notify --> Redis
 ```
 
-**How a request flows:** every browser call goes through Kong. Kong forwards `/api/*` to `api-producer`, which translates the URL into a NATS message — the right service picks it up, does the work, and replies. The browser gets a normal HTTP response and never knows NATS is involved.
-
-The WebSocket path (`/ws`) is the exception: Kong routes it directly to `notification-service`, which subscribes to Redis for live transfer events and pushes them to the open socket.
+**How a request flows:** every request hits Caddy first — the sole entry point on ports 80/443. Caddy proxies to Kong (ClusterIP), which routes `/api/*` to `api-producer`. The services communicate internally via NATS. With TLS enabled, Caddy handles certs via Let's Encrypt HTTP-01 challenge (no API token needed).
 
 ---
 
@@ -79,6 +82,7 @@ The WebSocket path (`/ws`) is the exception: Kong routes it directly to `notific
 
 | Service | What it does | Port |
 |---|---|---|
+| `caddy` | Edge proxy — TLS termination, HTTP→HTTPS redirect | 80, 443 |
 | `frontend` | React 19 + Vite SPA, served by nginx | 80 |
 | `kong` | API gateway — routes, CORS, rate limiting, tracing | 8000 |
 | `api-producer` | Translates HTTP requests into NATS messages | 8080 |
@@ -130,38 +134,93 @@ Update the proxy target in `vite.config.js` to point at your Kong instance.
 
 ## Deploy to Kubernetes with Helm
 
-### What you need before starting
+### Two deploy paths
 
-- **A Kubernetes cluster** — the chart is designed for k3s (e.g. a single EC2 instance). It also works on k3d, minikube, EKS, and GKE.
-- **`local-path` StorageClass** — used for Postgres and Redis volumes. k3s includes this by default. For other clusters, install [local-path-provisioner](https://github.com/rancher/local-path-provisioner).
-- **`kubectl`** configured to talk to your cluster (`kubectl get nodes` should work)
-- **`helm` ≥ 3.12** — check with `helm version`
+This chart is **self-contained** — deploy it on any K8s cluster using just Helm.
 
-The container images are public on `ghcr.io/dungxnd/banking-demo-revamp` — no registry credentials needed.
+| Path | How | When |
+|---|---|---|
+| **Standalone** | `helm install` directly | You already have a cluster (EKS, GKE, minikube, k3s, etc.) |
+| **Via [k8s-spinup](https://github.com/dungxnd/k8s-buildup-ec2-banking)** | Ansible clones this repo + `helm install` | You need the full AWS infra + cluster + app in one shot |
 
-### Deploy
 
-The chart sets up everything: namespaced secrets, NATS, Postgres, Redis, Kong, and all services.
+
+### Standalone deploy (recommended for testing)
+
+**Requirements:** a running K8s cluster with `kubectl` configured, Helm ≥ 3.12, and a `local-path` StorageClass (included by default in k3s).
 
 ```bash
-# From the repo root
+git clone https://github.com/dungxnd/banking-demo-revamp
+cd banking-demo-revamp
+
+# Deploy with demo credentials (HTTP-only, access via node IP)
 helm upgrade --install banking ./helm \
   --namespace banking --create-namespace \
   --wait --timeout 300s
 ```
 
-Kong uses **NodePort 30080** — every node forwards port 30080 to Kong. No cloud load balancer required. The app is available at `http://<any-node-ip>:30080/`.
+The app is available at `http://<any-node-ip>` on port 80 (Caddy binds the host network).
 
-> **Helm 4 users:** `--atomic` is now `--rollback-on-failure`. Fresh installs default to Server-Side Apply. If you installed with Helm 3 and are upgrading, add `--server-side=false`.
+**To enable HTTPS via Let's Encrypt** (HTTP-01 challenge, no API token needed):
+
+```bash
+helm upgrade --install banking ./helm \
+  -n banking --create-namespace \
+  -f helm/values.yaml \
+  --set caddy.tls.enabled=true \
+  --set caddy.tls.domain=bank.duckdns.org \
+  --wait
+```
+
+**To use real secrets** instead of the demo `bankingpass`:
+
+```bash
+cp helm/values.local.example.yaml helm/values.local.yaml
+# Edit helm/values.local.yaml with your actual passwords
+helm upgrade --install banking ./helm \
+  -n banking --create-namespace \
+  -f helm/values.yaml -f helm/values.local.yaml \
+  --wait
+```
+
+`helm/values.local.yaml` is gitignored — never committed.  
+→ See [Environment & Secrets](#environment--secrets) for the full secrets architecture.
+
+
+
+### Deploy via k8s-spinup (AWS from scratch)
+
+The companion repo [`k8s-spinup`](https://github.com/dungxnd/k8s-buildup-ec2-banking) provisions the full stack: EC2 instances, K8s cluster, and deploys this chart.
+
+```
+┌─────────────────────────┐    ┌──────────────────────────┐
+│  k8s-spinup             │    │  banking-demo (this repo)│
+├─────────────────────────┤    ├──────────────────────────┤
+│  Terraform → 3 EC2 + SG │    │  Source code + Helm chart│
+│  Ansible  → kubeadm+K8s │    │  CI builds & pushes image│
+│           → Clone this  │    │  Self-contained chart    │
+│           → Helm install│    │  No awareness of infra   │
+└─────────────────────────┘    └──────────────────────────┘
+```
+
+From `k8s-spinup`:
+
+```bash
+make all
+#  1. Terraform:   3 EC2 + SG (ports 22, 80, 443 only)
+#  2. Ansible:     OS → containerd → kubeadm → Cilium
+#  3. Ansible:     Clone banking-demo → helm install
+#     Output:      http://<EC2_IP> or https://bank.duckdns.org
+```
 
 ### Check that everything started
 
 ```bash
-# All pods should show Running or Completed within about 60 seconds
+# All pods should show Running within ~60 seconds
 kubectl get pods -n banking
 
-# Send a test request
-curl -s http://<node-ip>:30080/api/health
+# Send a test request (Caddy serves on :80 via hostNetwork)
+curl -s http://<node-ip>/api/health
 
 # Consumers print this when they've connected to NATS and are ready
 kubectl logs -n banking -l app=auth-service --tail=5 | grep nats_micro_service_started
@@ -196,29 +255,52 @@ helm upgrade banking ./helm -n banking --reuse-values \
   --set frontend.image.tag=sha-abc1234
 ```
 
-### NodePort access (vanilla k8s / bare-metal)
+### Domains & TLS
 
-Kong exposes port 30080 on every node via NodePort. Access the app at `http://<any-node-ip>:30080/`.
+By default the app serves plain HTTP on the node's public IP. To enable HTTPS you need a domain whose A record points to your EC2.
 
-### Optional: Ingress for cloud clusters (EKS / GKE)
+The chart uses **DuckDNS** (free dynamic DNS) — EC2 IPs change on stop/start, DuckDNS keeps your domain pointed at the current IP via a cron job.
 
-On bare-metal/k3s, Kong uses NodePort — no Ingress needed.
-For cloud clusters with a domain name, enable the Ingress resource:
+**Where things live:**
+
+| What | Where | Why |
+|---|---|---|
+| **Domain name** | `helm/values.local.yaml` → `caddy.tls.domain` | Tells Caddy which domain to get a cert for |
+| **DuckDNS token** | `k8s-spinup` (EC2 user-data or Ansible) | Token keeps DNS in sync — infra concern, not app concern |
+
+**banking-demo chart** (this repo):
+```yaml
+# helm/values.local.yaml
+caddy:
+  tls:
+    enabled: true
+    domain: "bank.duckdns.org"        # domain name only, no token
+```
+
+**k8s-spinup** (infra repo) — DuckDNS update cron on the EC2:
+```bash
+# Runs every 5 minutes, keeps bank.duckdns.org → current EC2 public IP
+*/5 * * * * root curl -s "https://www.duckdns.org/update?domains=bank&token=YOUR_TOKEN" > /dev/null
+```
+
+Deploy:
+```bash
+helm upgrade banking ./helm -n banking --reuse-values \
+  --set caddy.tls.enabled=true \
+  --set caddy.tls.domain=bank.duckdns.org \
+  --wait
+```
+
+Caddy gets a Let's Encrypt cert via HTTP-01 challenge (port 80). No API token needed in the chart — Caddy doesn't talk to DuckDNS, Let's Encrypt does the validation directly.
+
+### Network policies
+
+When `networkPolicies.enabled: true` (default), the chart applies a **default-deny-ingress** policy across the namespace and whitelists only the necessary paths. Egress is fully allowed. Disable on clusters without a CNI that supports NetworkPolicy:
 
 ```bash
 helm upgrade banking ./helm -n banking --reuse-values \
-  --set ingress.enabled=true \
-  --set ingress.className=nginx \
-  --set ingress.host=banking.example.com \
-  --set kong.service.type=LoadBalancer \
-  --set kong.service.nodePort=null
+  --set networkPolicies.enabled=false
 ```
-
-| Cluster type | `ingress.className` |
-|---|---|
-| k3s (default target) | `traefik` |
-| minikube | `nginx` |
-| HAProxy Ingress | `haproxy` |
 
 ### Optional: Disable JetStream
 
@@ -247,7 +329,96 @@ kubectl exec -it -n banking deploy/postgres -- \
 
 ---
 
-## Observability
+## Environment & Secrets
+
+### How secrets are managed
+
+Secrets follow a **two-layer override pattern** — no encryption tools, no vault, just git-ignored files.
+
+| File | In git? | Purpose |
+|---|---|---|
+| `helm/values.yaml` | ✅ committed | Demo credentials (`bankingpass`). Safe to deploy for testing. |
+| `helm/values.local.yaml` | ❌ gitignored | Real secrets (passwords, tokens). Never committed. |
+| `helm/values.local.example.yaml` | ✅ committed | Template — copy and fill in your values. |
+
+### How it flows
+
+```
+values.yaml         ─┐
+values.local.yaml   ─┤  helm install -f values.yaml -f values.local.yaml
+                      │
+          ┌───────────┘
+          ▼
+   Helm renders:
+     ├── Secret ("banking-db-secret")     ← POSTGRES_USER/PASSWORD, DATABASE_URL, REDIS_URL
+     ├── Secret ("nats-connection-secret") ← NATS_URL
+     └── ConfigMap ("shared-env")         ← LOG_LEVEL, TZ, POSTGRES_HOST, REDIS_HOST, NATS_URL
+          │
+          ▼
+   Services consume via:
+     - envFrom: configMapRef → shared-env
+     - envFrom: secretRef    → banking-db-secret
+     - envFrom: secretRef    → nats-connection-secret
+```
+
+### Kubernetes Secrets created
+
+Two `Opaque` Secrets are rendered from values:
+
+**`banking-db-secret`** — consumed by all backend services and Postgres:
+```yaml
+POSTGRES_USER: "banking"
+POSTGRES_PASSWORD: "bankingpass"       # override via values.local.yaml
+POSTGRES_DB: "banking"
+DATABASE_URL: "postgres://banking:bankingpass@postgres:5432/banking?sslmode=disable"
+REDIS_URL: "redis://redis:6379"
+```
+
+**`nats-connection-secret`** — consumed by api-producer and all consumers:
+```yaml
+NATS_URL: "nats://nats:4222"
+```
+
+### shared-env ConfigMap
+
+Centralized non-sensitive env vars applied to all backend services:
+
+```yaml
+LOG_LEVEL: "info"
+TZ: "Asia/Ho_Chi_Minh"
+NATS_URL: "nats://nats:4222"
+REDIS_HOST: "redis"
+REDIS_PORT: "6379"
+POSTGRES_HOST: "postgres"
+POSTGRES_PORT: "5432"
+POSTGRES_DB: "banking"
+```
+
+### Override secrets for production
+
+```bash
+cp helm/values.local.example.yaml helm/values.local.yaml
+
+# Edit helm/values.local.yaml:
+#   secret:
+#     postgresPassword: "your-real-password-here"
+
+helm upgrade --install banking ./helm \
+  -n banking --create-namespace \
+  -f helm/values.yaml -f helm/values.local.yaml \
+  --wait
+```
+
+### Why no SOPS / Vault / Sealed Secrets?
+
+| Factor | Reality |
+|---|---|
+| Blast radius | This is a banking **demo**. `bankingpass` is a known demo credential. |
+| Complexity budget | SOPS requires age key management, key distribution to CI, key rotation. For a demo, the local file pattern is sufficient. |
+| Custom chart design | The chart intentionally separates `values.yaml` (config) from `values.local.yaml` (secrets). This is the simplest pattern that scales to production. |
+| Production path | When going to production, swap `values.local.yaml` for External Secrets Operator (ESO) + AWS Secrets Manager, or Sealed Secrets. The chart's Secret templates don't change — only the values source does. |
+
+The **chart itself is production-ready** — the Secret templates use `stringData` (not base64), support any secret backend via `--set` or `-f`, and the service Deployments consume secrets via `secretKeyRef` with configurable key mappings.
 
 ### Logs
 
@@ -417,8 +588,15 @@ These variables are injected from the Helm-managed secret. Override them in `hel
 │
 ├── helm/                    # Helm chart — deploys the complete stack to Kubernetes
 │   ├── Chart.yaml
-│   ├── values.yaml          #   edit this to change images, credentials, resources
+│   ├── values.yaml          #   default config — demo credentials, ready to deploy
+│   ├── values.local.example.yaml  #   template for gitignored real secrets
 │   └── templates/
+│       ├── caddy.yaml              #   edge proxy (hostNetwork, TLS, reverse proxy)
+│       ├── kong.yaml               #   API gateway (ClusterIP, DB-less)
+│       ├── shared-env.yaml         #   centralized ConfigMap
+│       ├── secret.yaml             #   Kubernetes Opaque Secret
+│       ├── network-policy-*.yaml   #   default-deny ingress, allow-all egress
+│       └── ...                     #   services, datastores, migration job
 │
 ├── monitoring/              # Kubernetes manifests for Prometheus, Grafana, Jaeger
 ├── instana/                 # Instana agent config, synthetic tests, runbooks
@@ -451,8 +629,9 @@ Then update `image.repository` and `image.tag` in `helm/values.yaml` before depl
 
 | Layer | Technology |
 |---|---|
+| Edge proxy | Caddy 2.11 (hostNetwork, TLS termination, Let's Encrypt) |
 | Frontend | React 19, Vite, Tailwind CSS v4 |
-| API gateway | Kong 3.9 (DB-less, declarative config) |
+| API gateway | Kong 3.9 (DB-less, ClusterIP) |
 | HTTP entry | Go + chi router (`api-producer`) |
 | Message bus | NATS 2 with `nats/micro` service framework |
 | Durable event bus | NATS JetStream (`BANKING_EVENTS` stream) |

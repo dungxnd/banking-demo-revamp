@@ -30,3 +30,7 @@ infra/ansible/inventories/vps/group_vars/all.yml
 *.out
 .commandcode/taste/taste.md
 /.commandcode
+
+# Local Helm values with real secrets — NEVER commit
+helm/values.local.yaml
+**/values.local.yaml

@@ -27,6 +27,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default "*" .Values.global.corsOrigins -}}
 {{- end -}}
 
+{{- define "banking-demo.sharedEnvConfigMapName" -}}
+{{- .Values.sharedEnvConfigMapName | default "shared-env" -}}
+{{- end -}}
+
 {{/* --- Postgres --- */}}
 {{- define "banking-demo.postgres.fullname" -}}{{- .Values.postgres.fullnameOverride | default "postgres" -}}{{- end -}}
 {{- define "banking-demo.postgres.labels" -}}
@@ -133,6 +137,19 @@ app.kubernetes.io/component: frontend
 {{- end -}}
 {{- define "banking-demo.frontend.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "banking-demo.frontend.fullname" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
+{{/* --- Caddy --- */}}
+{{- define "banking-demo.caddy.fullname" -}}{{- .Values.caddy.fullnameOverride | default "caddy" -}}{{- end -}}
+{{- define "banking-demo.caddy.configMapName" -}}{{- .Values.caddy.configMapName | default "caddy-config" -}}{{- end -}}
+{{- define "banking-demo.caddy.labels" -}}
+app.kubernetes.io/name: {{ include "banking-demo.caddy.fullname" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: caddy
+{{- end -}}
+{{- define "banking-demo.caddy.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "banking-demo.caddy.fullname" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 

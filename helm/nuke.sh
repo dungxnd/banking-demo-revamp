@@ -18,6 +18,7 @@ NS="banking"
 RELEASE="banking"
 CHART="./helm"
 VALUES="helm/values.yaml"
+LOCAL_VALUES="helm/values.local.yaml"
 
 # Honour KUBECONFIG env var; default to the user kubeconfig.
 export KUBECONFIG="${KUBECONFIG:-/home/ubuntu/.kube/config}"
@@ -84,10 +85,17 @@ echo "    Namespace is clear."
 if [[ "$REINSTALL" == "true" ]]; then
   echo ""
   echo "=== Reinstalling banking-demo ==="
+
+  HELM_ARGS="-f $VALUES"
+  if [[ -f "$LOCAL_VALUES" ]]; then
+    HELM_ARGS="$HELM_ARGS -f $LOCAL_VALUES"
+    echo "  Using local secrets: $LOCAL_VALUES"
+  fi
+
   helm upgrade --install "$RELEASE" "$CHART" \
     -n "$NS" \
     --create-namespace \
-    -f "$VALUES" \
+    $HELM_ARGS \
     --wait \
     --timeout 300s
 

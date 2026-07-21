@@ -6,6 +6,14 @@
 #   - change credentials / connection strings
 #   - toggle features (secret.enabled, dbMigration.enabled, etc.)
 #   - tune resources or CORS
+#
+# For real secrets (production): create helm/values.local.yaml
+# (gitignored) and override the secrets.* values there.
+# See helm/values.local.example.yaml for a template.
+#
+# Deploy with:
+#   helm upgrade --install banking ./helm -n banking --create-namespace \
+#     -f helm/values.yaml -f helm/values.local.yaml --wait
 # ============================================================
 
 # ── Global ───────────────────────────────────────────────────
@@ -23,6 +31,45 @@ secret:
   databaseUrl: "postgres://banking:bankingpass@postgres:5432/banking?sslmode=disable"
   redisUrl: "redis://redis:6379"
   natsUrl: "nats://nats:4222"
+
+# ── Caddy — Edge proxy (hostNetwork, ghim control-plane node) ─
+caddy:
+  enabled: true
+  image:
+    repository: caddy
+    tag: "2-alpine"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  hostNetwork: true
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+  tls:
+    enabled: false                 # true = HTTPS via Let's Encrypt (HTTP-01 challenge, no API key needed)
+    domain: ""                     # e.g. "bank.duckdns.org" (any domain with A record → node IP)
+  resources:
+    requests: { cpu: 50m,  memory: 64Mi }
+    limits:   { cpu: 200m, memory: 128Mi }
+  securityContext:
+    pod: {}
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+
+# ── Shared Env — ConfigMap applied to all backend services ────
+sharedEnv:
+  LOG_LEVEL: "info"
+  TZ: "Asia/Ho_Chi_Minh"
+  NATS_URL: "nats://nats:4222"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "banking"
+
+# ── Network Policies ─────────────────────────────────────────
+networkPolicies:
+  enabled: true                    # false on clusters without CNI policy support
 
 # ── DB Migration Job ─────────────────────────────────────────
 dbMigration:
@@ -164,11 +211,11 @@ kong:
   adminPort: 8001
   adminPortName: admin
 
-  # NodePort exposes Kong on every node at port 30080.
-  # Works on any vanilla K8s / bare-metal cluster without a cloud LB.
+  # ClusterIP — Caddy is the sole entry point on :80/:443 via hostNetwork.
+  # Caddy proxies → kong-proxy.banking.svc.cluster.local:8000.
+  # No NodePort, no external exposure of Kong.
   service:
-    type: NodePort
-    nodePort: 30080
+    type: ClusterIP
 
   updateStrategy: RollingUpdate
 
@@ -181,15 +228,15 @@ kong:
     KONG_ADMIN_ERROR_LOG: "/dev/stderr"
     # Bind admin API on all interfaces so the Instana agent pod (running in
     # instana-agent namespace) can reach it via cluster DNS / ClusterIP Service.
-    # The admin port (8001) is NOT exposed via hostPort and is only reachable
-    # from within the cluster — no external exposure risk.
+    # The admin port (8001) is NOT exposed externally — only reachable
+    # from within the cluster.
     KONG_ADMIN_LISTEN: "0.0.0.0:8001"
     KONG_PROXY_LISTEN: "0.0.0.0:8000"
     KONG_NGINX_WORKER_PROCESSES: "1"
     KONG_TRACING_INSTRUMENTATIONS: all
     KONG_TRACING_SAMPLING_RATE: "1.0"
     KONG_OPENTELEMETRY_TRACING: "on"
-    # Trust X-Forwarded-* from any upstream load balancer / cloud NLB.
+    # Trust X-Forwarded-* from Caddy (upstream edge proxy).
     KONG_TRUSTED_IPS: "0.0.0.0/0,::/0"
     KONG_REAL_IP_HEADER: "X-Forwarded-For"
 
@@ -295,7 +342,7 @@ kong:
     - name: prometheus
     # opentelemetry plugin — propagates W3C traceparent into upstream HTTP
     # requests so api-producer receives the Kong span as its parent, linking
-    # the full trace waterfall: Traefik → Kong → api-producer → NATS services.
+    # the full trace waterfall: Caddy → Kong → api-producer → NATS services.
     #
     # traces_endpoint: Kong POSTs to this URL verbatim (no path appended).
     # Instana agent OTLP/HTTP: POST /v1/traces → 200 OK (confirmed).

@@ -175,7 +175,7 @@ requires:
 
 - `com.instana.plugin.kubernetes: enabled: true` + `kubeconfig: /etc/rancher/k3s/k3s.yaml`
 - `sudo chmod 644 /etc/rancher/k3s/k3s.yaml` (k3s recreates it `600` on every restart)
-- NodePorts for Redis (32002) and Kong admin (32001) so the host-agent can reach them
+- ClusterIP services for all internal components — host-agent reaches pods via ClusterIP DNS within the cluster
 - `sudo systemctl restart instana-agent` after any config change
 
 See [`01-agent-install.md`](./01-agent-install.md) and

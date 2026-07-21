@@ -1,0 +1,100 @@
+{{- if .Values.caddy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "banking-demo.caddy.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "banking-demo.caddy.labels" . | nindent 4 }}
+    {{- include "banking-demo.labels" . | nindent 4 }}
+data:
+  Caddyfile: |
+    {{- if and .Values.caddy.tls.enabled .Values.caddy.tls.domain }}
+    # ═══ TLS enabled: HTTPS via Let's Encrypt HTTP-01 challenge ═══
+    {{ .Values.caddy.tls.domain }} {
+        tls
+        reverse_proxy kong.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.kong.proxyPort }} {
+            lb_policy round_robin
+            lb_try_duration 5s
+        }
+        header {
+            Strict-Transport-Security "max-age=31536000; includeSubDomains"
+            X-Content-Type-Options "nosniff"
+        }
+    }
+    {{- end }}
+
+    # ═══ HTTP on raw IP — always active ═══
+    :80 {
+        reverse_proxy kong.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.kong.proxyPort }} {
+            lb_policy round_robin
+            lb_try_duration 5s
+        }
+        header {
+            X-Content-Type-Options "nosniff"
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "banking-demo.caddy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "banking-demo.caddy.labels" . | nindent 4 }}
+    {{- include "banking-demo.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.caddy.replicas }}
+  selector:
+    matchLabels:
+      {{- include "banking-demo.caddy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "banking-demo.caddy.fullname" . }}
+        {{- include "banking-demo.caddy.selectorLabels" . | nindent 8 }}
+    spec:
+      hostNetwork: {{ .Values.caddy.hostNetwork }}
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        {{- toYaml .Values.caddy.nodeSelector | nindent 8 }}
+      {{- with .Values.caddy.securityContext.pod }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: caddy
+          image: "{{ .Values.caddy.image.repository }}:{{ .Values.caddy.image.tag }}"
+          imagePullPolicy: {{ .Values.caddy.image.pullPolicy }}
+          {{- with .Values.caddy.securityContext.container }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: 80
+              name: http
+            - containerPort: 443
+              name: https
+          volumeMounts:
+            - name: caddyfile
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+            - name: caddy-data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.caddy.resources | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: caddyfile
+          configMap:
+            name: {{ include "banking-demo.caddy.configMapName" . }}
+        - name: caddy-data
+          emptyDir: {}
+{{- end }}

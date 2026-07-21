@@ -1,0 +1,34 @@
+{{- if .Values.networkPolicies.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kong-to-services
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "banking-demo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - auth-service
+          - account-service
+          - transfer-service
+          - notification-service
+          - frontend
+          - api-producer
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "banking-demo.kong.selectorLabels" . | nindent 14 }}
+      ports:
+        - { port: 8001, protocol: TCP }
+        - { port: 8002, protocol: TCP }
+        - { port: 8003, protocol: TCP }
+        - { port: 8004, protocol: TCP }
+        - { port: 8080, protocol: TCP }
+        - { port: 80,   protocol: TCP }
+{{- end }}
