@@ -247,6 +247,7 @@ kong:
   updateStrategy: RollingUpdate
 
   env:
+    KONG_PREFIX: "/tmp/kong"
     KONG_DATABASE: "off"
     KONG_DECLARATIVE_CONFIG: "/kong/kong.yml"
     KONG_PROXY_ACCESS_LOG: "/dev/stdout"

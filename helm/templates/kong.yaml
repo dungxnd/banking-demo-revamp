@@ -154,8 +154,8 @@ spec:
             - name: kong-config
               mountPath: {{ .Values.kong.configMountPath }}
               readOnly: true
-            - name: kong-prefix
-              mountPath: /usr/local/kong
+            - name: tmp
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.kong.resources | nindent 12 }}
           {{- if ((.Values.kong.readinessProbe).enabled) }}
@@ -179,7 +179,7 @@ spec:
         - name: kong-config
           configMap:
             name: {{ include "banking-demo.kong.configMapName" . }}
-        - name: kong-prefix
+        - name: tmp
           emptyDir: {}
 ---
 # Kong Service — ClusterIP (Caddy is the edge proxy on :80/:443 via hostNetwork).
