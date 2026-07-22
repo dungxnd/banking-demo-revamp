@@ -63,8 +63,6 @@ spec:
         app: {{ include "banking-demo.caddy.fullname" . }}
         {{- include "banking-demo.caddy.labels" . | nindent 8 }}
     spec:
-      hostNetwork: {{ .Values.caddy.hostNetwork }}
-      dnsPolicy: ClusterFirstWithHostNet
       nodeSelector:
         {{- toYaml .Values.caddy.nodeSelector | nindent 8 }}
       {{- with .Values.caddy.tolerations }}
@@ -85,8 +83,10 @@ spec:
           {{- end }}
           ports:
             - containerPort: 80
+              hostPort: 80
               name: http
             - containerPort: 443
+              hostPort: 443
               name: https
           volumeMounts:
             - name: caddyfile

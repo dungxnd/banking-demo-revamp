@@ -32,7 +32,7 @@ secret:
   redisUrl: "redis://redis:6379"
   natsUrl: "nats://nats:4222"
 
-# ── Caddy — Edge proxy (hostNetwork, ghim control-plane node) ─
+# ── Caddy — Edge proxy (hostPort, ghim control-plane node) ─
 caddy:
   enabled: true
   image:
@@ -40,7 +40,6 @@ caddy:
     tag: "2-alpine"
     pullPolicy: IfNotPresent
   replicas: 1
-  hostNetwork: true
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
   tolerations:

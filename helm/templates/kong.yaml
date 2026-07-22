@@ -182,7 +182,7 @@ spec:
         - name: tmp
           emptyDir: {}
 ---
-# Kong Service — ClusterIP (Caddy is the edge proxy on :80/:443 via hostNetwork).
+# Kong Service — ClusterIP (Caddy is the edge proxy on :80/:443 via hostPort).
 # No NodePort — only internal cluster access.
 apiVersion: v1
 kind: Service

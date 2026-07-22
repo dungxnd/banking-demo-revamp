@@ -19,7 +19,7 @@ helm_extra_args: ""               # e.g. "--set kong.replicas=2"
 # ── Deployment paths ──────────────────────────────────────────────────────────
 app_dir: /opt/banking-demo
 
-# ── Healthcheck (Caddy hostNetwork port 80) ────────────────────────────────────
+# ── Healthcheck (Caddy hostPort 80) ────────────────────────────────────
 app_healthcheck_url: "http://localhost:80"
 app_healthcheck_retries: 20
 app_healthcheck_delay: 15
