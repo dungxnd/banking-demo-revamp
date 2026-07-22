@@ -7,17 +7,18 @@ metadata:
   labels:
     {{- include "banking-demo.labels" . | nindent 4 }}
 spec:
+  # Target: all app microservices — matched by app.kubernetes.io/name
   podSelector:
     matchExpressions:
-      - key: app.kubernetes.io/component
+      - key: app.kubernetes.io/name
         operator: In
         values:
-          - auth-service
-          - account-service
-          - transfer-service
-          - notification-service
-          - frontend
-          - api-producer
+          - {{ include "banking-demo.auth-service.fullname" . }}
+          - {{ include "banking-demo.account-service.fullname" . }}
+          - {{ include "banking-demo.transfer-service.fullname" . }}
+          - {{ include "banking-demo.notification-service.fullname" . }}
+          - {{ include "banking-demo.frontend.fullname" . }}
+          - {{ include "banking-demo.api-producer.fullname" . }}
   policyTypes: [Ingress]
   ingress:
     - from:

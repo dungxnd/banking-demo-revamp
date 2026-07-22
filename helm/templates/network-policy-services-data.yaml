@@ -7,28 +7,39 @@ metadata:
   labels:
     {{- include "banking-demo.labels" . | nindent 4 }}
 spec:
+  # Target: postgres, redis, nats — matched by app.kubernetes.io/name (same key
+  # that the Services themselves use in their .spec.selector).
   podSelector:
     matchExpressions:
-      - key: app.kubernetes.io/component
+      - key: app.kubernetes.io/name
         operator: In
         values:
-          - postgres
-          - redis
-          - nats
+          - {{ include "banking-demo.postgres.fullname" . }}
+          - {{ include "banking-demo.redis.fullname" . }}
+          - {{ include "banking-demo.nats.fullname" . }}
   policyTypes: [Ingress]
   ingress:
+    # Allow all backend + kong pods in the same namespace to reach data tier
     - from:
         - podSelector:
             matchExpressions:
-              - key: app.kubernetes.io/component
+              - key: app.kubernetes.io/name
                 operator: In
                 values:
-                  - auth-service
-                  - account-service
-                  - transfer-service
-                  - notification-service
-                  - frontend
-                  - api-producer
-                  - kong
-                  - nats-exporter
+                  - {{ include "banking-demo.auth-service.fullname" . }}
+                  - {{ include "banking-demo.account-service.fullname" . }}
+                  - {{ include "banking-demo.transfer-service.fullname" . }}
+                  - {{ include "banking-demo.notification-service.fullname" . }}
+                  - {{ include "banking-demo.frontend.fullname" . }}
+                  - {{ include "banking-demo.api-producer.fullname" . }}
+                  - {{ include "banking-demo.kong.fullname" . }}
+                  - {{ include "banking-demo.nats.fullname" . }}
+      ports:
+        # Postgres
+        - { port: 5432, protocol: TCP }
+        # Redis
+        - { port: 6379, protocol: TCP }
+        # NATS client + monitoring (used by initContainers' wget healthz check)
+        - { port: 4222, protocol: TCP }
+        - { port: 8222, protocol: TCP }
 {{- end }}
