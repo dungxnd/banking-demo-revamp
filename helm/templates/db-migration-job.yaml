@@ -21,6 +21,13 @@ spec:
         app.kubernetes.io/component: migration
     spec:
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: migrate
           image: {{ .Values.dbMigration.image | quote }}

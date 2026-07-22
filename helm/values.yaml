@@ -57,11 +57,18 @@ caddy:
     requests: { cpu: 50m,  memory: 64Mi }
     limits:   { cpu: 200m, memory: 128Mi }
   securityContext:
-    pod: {}
+    pod:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
     container:
-      allowPrivilegeEscalation: false
+      allowPrivilegeEscalation: true
       capabilities:
         drop: ["ALL"]
+        add: ["NET_BIND_SERVICE"]
 
 # ── Shared Env — ConfigMap applied to all backend services ────
 sharedEnv:
@@ -124,8 +131,17 @@ postgres:
       memory: "512Mi"
       cpu: "500m"
   securityContext:
-    pod: {}
-    container: {}
+    pod:
+      runAsNonRoot: true
+      runAsUser: 999
+      runAsGroup: 999
+      fsGroup: 999
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
   readinessProbe:
     enabled: true
     user: banking
@@ -158,8 +174,17 @@ redis:
       memory: "256Mi"
       cpu: "250m"
   securityContext:
-    pod: {}
-    container: {}
+    pod:
+      runAsNonRoot: true
+      runAsUser: 999
+      runAsGroup: 999
+      fsGroup: 999
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
   readinessProbe:
     enabled: true
     command: ["redis-cli", "ping"]
@@ -188,7 +213,17 @@ nats:
       memory: "256Mi"
       cpu: "250m"
   securityContext:
-    container: {}
+    pod:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
   exporter:
     enabled: true
     image:
@@ -408,6 +443,10 @@ kong:
 
   securityContext:
     pod:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
       seccompProfile:
         type: RuntimeDefault
     container:
@@ -441,8 +480,17 @@ frontend:
       memory: "256Mi"
       cpu: "250m"
   securityContext:
-    pod: {}
-    container: {}
+    pod:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
   readinessProbe:
     enabled: true
     path: /
@@ -481,6 +529,10 @@ auth-service:
       cpu: "500m"
   securityContext:
     pod:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
       seccompProfile:
         type: RuntimeDefault
     container:
@@ -523,6 +575,10 @@ account-service:
       cpu: "500m"
   securityContext:
     pod:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
       seccompProfile:
         type: RuntimeDefault
     container:
@@ -565,6 +621,10 @@ transfer-service:
       cpu: "500m"
   securityContext:
     pod:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
       seccompProfile:
         type: RuntimeDefault
     container:
@@ -607,6 +667,10 @@ notification-service:
       cpu: "500m"
   securityContext:
     pod:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
       seccompProfile:
         type: RuntimeDefault
     container:
@@ -647,8 +711,17 @@ api-producer:
       memory: "512Mi"
       cpu: "500m"
   securityContext:
-    pod: {}
-    container: {}
+    pod:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    container:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
   readinessProbe:
     enabled: true
     path: /health

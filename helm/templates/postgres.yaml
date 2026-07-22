@@ -101,6 +101,7 @@ metadata:
     app: {{ include "banking-demo.postgres.fullname" . }}
     {{- include "banking-demo.postgres.labels" . | nindent 4 }}
 spec:
+  publishNotReadyAddresses: true
   ports:
     - port: {{ .Values.postgres.service.port }}
       targetPort: {{ .Values.postgres.service.port }}

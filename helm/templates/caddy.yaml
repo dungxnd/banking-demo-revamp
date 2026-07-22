@@ -85,6 +85,8 @@ spec:
               subPath: Caddyfile
             - name: caddy-data
               mountPath: /data
+            - name: caddy-config
+              mountPath: /config
           resources:
             {{- toYaml .Values.caddy.resources | nindent 12 }}
           livenessProbe:
@@ -100,5 +102,7 @@ spec:
           configMap:
             name: {{ include "banking-demo.caddy.configMapName" . }}
         - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
           emptyDir: {}
 {{- end }}

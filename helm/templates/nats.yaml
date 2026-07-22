@@ -93,6 +93,7 @@ metadata:
     app: {{ include "banking-demo.nats.fullname" . }}
     {{- include "banking-demo.nats.labels" . | nindent 4 }}
 spec:
+  publishNotReadyAddresses: true
   selector:
     {{- include "banking-demo.nats.selectorLabels" . | nindent 4 }}
   ports:
