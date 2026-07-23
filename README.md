@@ -24,7 +24,7 @@ The app has a web interface you open in a browser. Everything you do — logging
 flowchart TD
     Browser["🌐 Browser"]
 
-    subgraph Edge["Edge Proxy  (Caddy :80/:443, hostNetwork)"]
+    subgraph Edge["Edge Proxy  (Caddy :80/:443, hostPort)"]
         Caddy["Caddy 2.11\nTLS termination · HTTP→HTTPS redirect\nreverse proxy → Kong"]
     end
 
@@ -591,7 +591,7 @@ These variables are injected from the Helm-managed secret. Override them in `hel
 │   ├── values.yaml          #   default config — demo credentials, ready to deploy
 │   ├── values.local.example.yaml  #   template for gitignored real secrets
 │   └── templates/
-│       ├── caddy.yaml              #   edge proxy (hostNetwork, TLS, reverse proxy)
+│       ├── caddy.yaml              #   edge proxy (hostPort, TLS, reverse proxy)
 │       ├── kong.yaml               #   API gateway (ClusterIP, DB-less)
 │       ├── shared-env.yaml         #   centralized ConfigMap
 │       ├── secret.yaml             #   Kubernetes Opaque Secret
@@ -629,7 +629,7 @@ Then update `image.repository` and `image.tag` in `helm/values.yaml` before depl
 
 | Layer | Technology |
 |---|---|
-| Edge proxy | Caddy 2.11 (hostNetwork, TLS termination, Let's Encrypt) |
+| Edge proxy | Caddy 2.11 (hostPort, TLS termination, Let's Encrypt) |
 | Frontend | React 19, Vite, Tailwind CSS v4 |
 | API gateway | Kong 3.9 (DB-less, ClusterIP) |
 | HTTP entry | Go + chi router (`api-producer`) |
